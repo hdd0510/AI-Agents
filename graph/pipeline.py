@@ -15,12 +15,12 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint import checkpoint_graph
 from langchain_openai import ChatOpenAI
 
-from medical_ai_system.config import MedicalGraphConfig, SystemState
-from medical_ai_system.agents.detector import DetectorAgent
-from medical_ai_system.agents.classifier import ClassifierAgent
-from medical_ai_system.agents.vqa import VQAAgent
-from medical_ai_system.graph.nodes import task_analyzer, reflection_node, result_synthesizer
-from medical_ai_system.graph.routers import (
+from medical_ai_agents.config import MedicalGraphConfig, SystemState
+from medical_ai_agents.agents.detector import DetectorAgent
+from medical_ai_agents.agents.classifier import ClassifierAgent
+from medical_ai_agents.agents.vqa import VQAAgent
+from medical_ai_agents.graph.nodes import task_analyzer, reflection_node, result_synthesizer
+from medical_ai_agents.graph.routers import (
     task_router, post_detector_router, post_modality_router, 
     post_region_router, post_vqa_router
 )

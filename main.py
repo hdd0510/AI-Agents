@@ -13,8 +13,8 @@ import json
 import logging
 from typing import Dict, Any, Optional
 
-from medical_ai_system.config import MedicalGraphConfig
-from medical_ai_system.graph.pipeline import create_medical_ai_graph
+from medical_ai_agents.config import MedicalGraphConfig
+from medical_ai_agents.graph.pipeline import create_medical_ai_graph
 
 class MedicalAISystem:
     """
@@ -58,7 +58,7 @@ class MedicalAISystem:
             return {"error": f"Image not found: {image_path}", "success": False}
         
         # Create initial state
-        from medical_ai_system.config import SystemState
+        from medical_ai_agents.config import SystemState
         import uuid
         import time
         

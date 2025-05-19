@@ -10,7 +10,7 @@ Các hàm router để điều hướng luồng dữ liệu trong LangGraph.
 import logging
 from typing import Dict, Any, List
 
-from medical_ai_system.config import SystemState, TaskType
+from medical_ai_agents.config import SystemState, TaskType
 
 # Router to determine next step based on task type
 def task_router(state: SystemState) -> str:

@@ -18,8 +18,8 @@ logging.basicConfig(
 )
 
 # Import main components
-from medical_ai_system.config import MedicalGraphConfig, SystemState, TaskType
-from medical_ai_system.main import MedicalAISystem
+from config import MedicalGraphConfig, SystemState, TaskType
+from main import MedicalAISystem
 
 # Define package version
 __version__ = "1.0.0"

@@ -4,188 +4,180 @@
 """
 Medical AI Agents - VQA Agent
 ---------------------------
-Agent trả lời câu hỏi dựa trên hình ảnh nội soi.
+Agent trả lời câu hỏi về hình ảnh với LLM controller và LLaVA tool.
 """
 
-import os
+import json
+from typing import Dict, Any, List
 import logging
-from typing import Dict, Any, List, Optional
-import torch
-from PIL import Image
 
-from medical_ai_system.agents.base_agent import BaseAgent
-from medical_ai_system.config import VQAResult
+from agents.base_agent import BaseAgent
+from tools.base_tools import BaseTool
+from tools.vqa.llava_tools import LLaVATool
 
 class VQAAgent(BaseAgent):
-    """Agent trả lời câu hỏi dựa trên hình ảnh nội soi."""
+    """Agent trả lời câu hỏi về hình ảnh y tế sử dụng LLM controller."""
     
-    def __init__(self, model_path: str, device: str = "cuda"):
+    def __init__(self, model_path: str, llm_model: str = "gpt-4", device: str = "cuda"):
         """
-        Khởi tạo VQA Agent.
+        Khởi tạo VQA Agent với LLM controller.
         
         Args:
             model_path: Đường dẫn đến LLaVA model
+            llm_model: Mô hình LLM sử dụng làm controller
             device: Device để chạy model (cuda/cpu)
         """
-        super().__init__(name="VQA Agent", device=device)
+        super().__init__(name="VQA Agent", llm_model=llm_model, device=device)
         self.model_path = model_path
-        self.tokenizer = None
-        self.model = None
-        self.image_processor = None
-        self.context_len = None
-        self.conv = None
+        self.llava_tool = None
     
+    def _register_tools(self) -> List[BaseTool]:
+        """Register tools for this agent."""
+        self.llava_tool = LLaVATool(model_path=self.model_path, device=self.device)
+        return [self.llava_tool]
+    
+    def _get_system_prompt(self) -> str:
+        """Get the system prompt that defines this agent's role."""
+        return """Bạn là một AI chuyên gia y tế chuyên trả lời câu hỏi dựa trên hình ảnh nội soi tiêu hóa.
+Nhiệm vụ của bạn là phân tích câu hỏi y tế và sử dụng công cụ thị giác để trả lời chính xác.
+
+Bạn có thể sử dụng công cụ sau:
+1. llava_vqa: Công cụ trả lời câu hỏi dựa trên hình ảnh sử dụng mô hình LLaVA
+   - Tham số: image_path (str), question (str), medical_context (Dict, optional)
+   - Kết quả: câu trả lời và độ tin cậy
+
+Quy trình làm việc của bạn:
+1. Phân tích câu hỏi của người dùng
+2. Chuẩn bị câu hỏi chi tiết cho mô hình LLaVA
+3. Sử dụng công cụ llava_vqa để trả lời câu hỏi
+4. Phân tích câu trả lời và độ tin cậy
+5. Nâng cao chất lượng câu trả lời với kiến thức y tế chuyên môn
+
+Khi trả lời:
+- Đảm bảo câu trả lời có tính chuyên môn y tế cao
+- Chỉ ra những điểm không chắc chắn nếu có
+- Sử dụng ngôn ngữ phù hợp với chuyên gia y tế
+
+Bạn phải trả về JSON với định dạng:
+```json
+{
+  "vqa_result": {
+    "success": true/false,
+    "answer": "câu trả lời chi tiết",
+    "confidence": confidence_value,
+    "analysis": "phân tích chuyên môn về độ tin cậy và chất lượng câu trả lời"
+  }
+}
+```"""
+
     def initialize(self) -> bool:
-        """Load LLaVA model."""
+        """Khởi tạo agent và các công cụ."""
         try:
-            # Import LLaVA components
-            from llava.model.builder import load_pretrained_model
-            from llava.mm_utils import get_model_name_from_path
-            from llava.conversation import conv_templates
-            
-            # Get model name
-            model_name = os.path.basename(self.model_path.rstrip('/'))
-            
-            # Load model
-            self.logger.info(f"Loading LLaVA model from {self.model_path}")
-            self.tokenizer, self.model, self.image_processor, self.context_len = \
-                load_pretrained_model(self.model_path, model_name, self.device)
-            
-            # Set conversation template
-            self.conv = conv_templates["llava_v1"].copy()
-            
+            # Tools are already initialized in _register_tools
             self.initialized = True
             return True
-            
         except Exception as e:
-            self.logger.error(f"Failed to load LLaVA model: {str(e)}")
+            self.logger.error(f"Failed to initialize VQA agent: {str(e)}")
             self.initialized = False
             return False
     
-    def _process_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Process state to answer questions about image."""
-        # Check if we have an image and a query
-        if not state.get("image_path"):
-            return {**state, "vqa_result": {"success": False, "error": "No image path provided"}}
-        
-        if not state.get("query"):
-            return {**state, "vqa_result": {"success": False, "error": "No query provided"}}
-        
-        image_path = state["image_path"]
-        query = state["query"]
-        
-        # Load image
-        image = self.load_image(image_path)
-        if image is None:
-            return {**state, "vqa_result": {"success": False, "error": "Failed to load image"}}
-        
-        # Preprocess image
-        image_tensor = self.image_processor.preprocess(image, return_tensors="pt")["pixel_values"]
-        image_tensor = image_tensor.to(self.device)
-        
-        # Create enhanced prompt with medical context
+    def _extract_task_input(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract task-specific input from state."""
+        # Get detector results if available
         detector_result = state.get("detector_result", {})
         modality_result = state.get("modality_result", {})
         region_result = state.get("region_result", {})
         
-        # Get detection info
-        detection_info = ""
+        medical_context = {}
+        
+        # Add detection info to context
         if detector_result and detector_result.get("success", False):
             objects = detector_result.get("objects", [])
+            medical_context["detected_polyps"] = len(objects)
+            
             if objects:
-                detection_info = f"I detected {len(objects)} polyp(s) in the image. "
+                polyp_descriptions = []
                 for i, obj in enumerate(objects[:3]):  # Top 3 objects
-                    detection_info += f"Polyp {i+1}: {obj.get('confidence', 0):.2f} confidence, "
-                    detection_info += f"location: {obj.get('position_description', 'unknown')}. "
-            else:
-                detection_info = "No polyps were detected in the image. "
+                    desc = f"Polyp {i+1}: {obj.get('confidence', 0):.2f} confidence, "
+                    desc += f"location: {obj.get('position_description', 'unknown')}"
+                    polyp_descriptions.append(desc)
+                
+                medical_context["polyp_details"] = "; ".join(polyp_descriptions)
         
-        # Get modality and region info
-        modality_info = ""
+        # Add modality info
         if modality_result and modality_result.get("success", False):
-            modality = modality_result.get("class_name", "Unknown")
-            modality_info = f"The image was taken using {modality} imaging technique. "
+            medical_context["imaging_modality"] = modality_result.get("class_name", "Unknown")
         
-        region_info = ""
+        # Add region info
         if region_result and region_result.get("success", False):
-            region = region_result.get("class_name", "Unknown")
-            region_info = f"The anatomical location is {region}. "
+            medical_context["anatomical_region"] = region_result.get("class_name", "Unknown")
         
-        # Combine all context
-        context = detection_info + modality_info + region_info
+        # Add user-provided context
+        user_context = state.get("medical_context", {})
+        if user_context:
+            medical_context.update(user_context)
         
-        # Create prompt
-        prompt_template = (
-            "I am a medical AI assistant specialized in analyzing endoscopy images. "
-            "I'll answer your question about this medical image based on what I can observe.\n\n"
-            "Image context: {context}\n\n"
-            "Question: {question}\n\n"
-            "Answer:"
-        )
-        
-        prompt = prompt_template.format(context=context, question=query)
-        
-        # Clear conversation history
-        self.conv.clear()
-        
-        # Add prompt to conversation
-        self.conv.append_message(self.conv.roles[0], prompt)
-        self.conv.append_message(self.conv.roles[1], None)
-        
-        # Get prompt
-        prompt = self.conv.get_prompt()
-        
-        # Tokenize
-        input_ids = self.tokenizer(prompt, return_tensors="pt").input_ids.to(self.device)
-        
-        # Generate
-        with torch.inference_mode():
-            output_ids = self.model.generate(
-                input_ids,
-                images=image_tensor,
-                do_sample=True,
-                temperature=0.2,
-                max_new_tokens=512
-            )
-        
-        # Decode output
-        outputs = self.tokenizer.decode(output_ids[0, input_ids.shape[1]:], skip_special_tokens=True)
-        answer = outputs.strip()
-        
-        # Estimate confidence based on answer patterns
-        confidence = self._estimate_confidence(answer)
-        
-        # Create result
-        vqa_result: VQAResult = {
-            "success": True,
-            "answer": answer,
-            "confidence": confidence
+        return {
+            "image_path": state.get("image_path", ""),
+            "query": state.get("query", ""),
+            "medical_context": medical_context
         }
-        
-        return {**state, "vqa_result": vqa_result}
     
-    def _estimate_confidence(self, answer: str) -> float:
-        """Estimate confidence based on answer patterns."""
-        # Simple heuristic
-        low_confidence_phrases = [
-            "i'm not sure", "i am not sure", "unclear", "cannot determine",
-            "difficult to say", "hard to tell", "cannot see", "not visible",
-            "may be", "might be", "possibly", "probably", "uncertain"
-        ]
+    def _format_task_input(self, task_input: Dict[str, Any]) -> str:
+        """Format task input for LLM prompt."""
+        image_path = task_input.get("image_path", "")
+        query = task_input.get("query", "")
+        context = task_input.get("medical_context", {})
         
-        answer_lower = answer.lower()
-        confidence = 1.0
+        context_str = "\n".join([f"- {k}: {v}" for k, v in context.items()]) if context else "None"
         
-        # Reduce confidence for uncertainty phrases
-        for phrase in low_confidence_phrases:
-            if phrase in answer_lower:
-                confidence -= 0.1
-                if confidence < 0.3:
-                    confidence = 0.3
-                    break
+        return f"""Hình ảnh cần phân tích: {image_path}
         
-        # Reduce confidence for very short answers
-        if len(answer.split()) < 10:
-            confidence -= 0.1
-        
-        return max(0.0, min(1.0, confidence))
+Câu hỏi: {query if query else "Mô tả những gì bạn thấy trong hình ảnh này"}
+
+Thông tin y tế bổ sung:
+{context_str}
+
+Hãy sử dụng công cụ llava_vqa để trả lời câu hỏi này dựa trên hình ảnh.
+Cần đảm bảo câu trả lời có tính chuyên môn cao và chính xác về mặt y tế.
+
+Trả lời theo định dạng:
+
+Tool: [tên công cụ]
+Parameters: [tham số dưới dạng JSON]
+
+Sau khi sử dụng công cụ, hãy phân tích kết quả và đưa ra câu trả lời cuối cùng với độ tin cậy.
+"""
+    
+    def _extract_agent_result(self, synthesis: str) -> Dict[str, Any]:
+        """Extract agent result from LLM synthesis."""
+        try:
+            # Try to extract JSON
+            json_start = synthesis.find('{')
+            json_end = synthesis.rfind('}') + 1
+            
+            if json_start >= 0 and json_end > json_start:
+                json_str = synthesis[json_start:json_end]
+                vqa_result = json.loads(json_str)
+                return vqa_result
+            
+            # Fallback: Create result from synthesis text
+            return {
+                "vqa_result": {
+                    "success": True,
+                    "answer": synthesis,
+                    "confidence": 0.7,
+                    "analysis": "Generated from LLM synthesis"
+                }
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Failed to extract agent result: {str(e)}")
+            return {
+                "vqa_result": {
+                    "success": False,
+                    "error": str(e),
+                    "answer": synthesis,
+                    "confidence": 0.5
+                }
+            }

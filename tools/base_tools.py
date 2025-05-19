@@ -4,54 +4,41 @@
 """
 Medical AI Tools - Base Tool
 -------------------------
-Tool cơ sở cho hệ thống AI y tế.
+Tool cơ sở cho tất cả các công cụ trong hệ thống AI y tế.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+from pydantic import BaseModel
+import logging
 
-class Tool(ABC):
+class BaseTool(BaseModel):
     """Base class for all tools that agents can use."""
+    name: str
+    description: str
     
-    def __init__(self, name: str, description: str):
-        """
-        Khởi tạo base tool.
-        
-        Args:
-            name: Tên của tool
-            description: Mô tả chức năng của tool
-        """
-        self.name = name
-        self.description = description
+    def __init__(self, **data):
+        super().__init__(**data)
+        self.logger = logging.getLogger(f"tool.{self.name}")
     
-    @abstractmethod
-    def run(self, **kwargs) -> Dict[str, Any]:
-        """
-        Chạy tool với các tham số được cung cấp.
-        
-        Args:
-            **kwargs: Các tham số đầu vào
-            
-        Returns:
-            Kết quả của tool dưới dạng dictionary
-        """
-        pass
-    
-    def get_spec(self) -> Dict[str, Any]:
-        """Trả về đặc tả của tool để cung cấp cho agent."""
-        return {
-            "name": self.name,
-            "description": self.description,
-            "parameters": self._get_parameters(),
-            "returns": self._get_returns()
-        }
+    def __call__(self, **kwargs) -> Dict[str, Any]:
+        """Execute the tool with given parameters."""
+        try:
+            return self._run(**kwargs)
+        except Exception as e:
+            import traceback
+            self.logger.error(f"Error executing {self.name}: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "traceback": traceback.format_exc()
+            }
     
     @abstractmethod
-    def _get_parameters(self) -> Dict[str, Any]:
-        """Định nghĩa schema của các tham số đầu vào."""
+    def _run(self, **kwargs) -> Dict[str, Any]:
+        """Implement in subclasses to run the tool."""
         pass
     
-    @abstractmethod
-    def _get_returns(self) -> Dict[str, Any]:
-        """Định nghĩa schema của kết quả trả về."""
-        pass
+    def get_parameters_schema(self) -> Dict[str, Any]:
+        """Return JSON schema for the tool parameters."""
+        return {}

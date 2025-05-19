@@ -4,133 +4,152 @@
 """
 Medical AI Agents - Detector Agent
 --------------------------------
-Agent phát hiện polyp và đối tượng trong hình ảnh nội soi.
+Agent phát hiện polyp với LLM controller và YOLO detection tool.
 """
 
-import os
+import json
+from typing import Dict, Any, List
 import logging
-from typing import Dict, Any, List, Optional
-import numpy as np
-from PIL import Image
 
-from medical_ai_system.agents.base_agent import BaseAgent
-from medical_ai_system.config import DetectionResult
+from agents.base_agent import BaseAgent
+from tools.base_tools import BaseTool
+from tools.detection.yolo_tools import YOLODetectionTool
+from tools.detection.util_tools import VisualizationTool
 
 class DetectorAgent(BaseAgent):
-    """Agent phát hiện polyp trong hình ảnh nội soi."""
+    """Agent phát hiện polyp trong hình ảnh nội soi sử dụng LLM controller."""
     
-    def __init__(self, model_path: str, device: str = "cuda", confidence_threshold: float = 0.25):
+    def __init__(self, model_path: str, llm_model: str = "gpt-4", device: str = "cuda"):
         """
-        Khởi tạo Detector Agent.
+        Khởi tạo Detector Agent với LLM controller.
         
         Args:
             model_path: Đường dẫn đến YOLO model weights
+            llm_model: Mô hình LLM sử dụng làm controller
             device: Device để chạy model (cuda/cpu)
-            confidence_threshold: Ngưỡng confidence cho detection
         """
-        super().__init__(name="Detector Agent", device=device)
+        super().__init__(name="Detector Agent", llm_model=llm_model, device=device)
         self.model_path = model_path
-        self.confidence_threshold = confidence_threshold
-        self.model = None
+        self.yolo_tool = None
+        self.visualize_tool = None
     
+    def _register_tools(self) -> List[BaseTool]:
+        """Register tools for this agent."""
+        self.yolo_tool = YOLODetectionTool(model_path=self.model_path, device=self.device)
+        self.visualize_tool = VisualizationTool()
+        
+        return [self.yolo_tool, self.visualize_tool]
+    
+    def _get_system_prompt(self) -> str:
+        """Get the system prompt that defines this agent's role."""
+        return """Bạn là một AI chuyên gia về phát hiện polyp trong hình ảnh nội soi tiêu hóa. 
+Nhiệm vụ của bạn là phân tích hình ảnh để xác định vị trí, kích thước và đặc điểm của các polyp.
+
+Bạn có thể sử dụng các công cụ sau:
+1. yolo_detection: Công cụ phát hiện polyp sử dụng mô hình YOLO
+   - Tham số: image_path (str), conf_thresh (float, optional)
+   - Kết quả: danh sách các polyp với thông tin bbox, confidence, position, v.v.
+
+2. visualize_detections: Tạo hình ảnh visualization các polyp được phát hiện
+   - Tham số: image_path (str), detections (List[Dict])
+   - Kết quả: hình ảnh base64 có các bounding box
+
+Quy trình làm việc của bạn:
+1. Xác định hình ảnh cần phân tích
+2. Sử dụng công cụ yolo_detection để phát hiện polyp
+3. Phân tích kết quả phát hiện (số lượng, vị trí, kích thước, độ tin cậy)
+4. Tạo visualization nếu có polyp được phát hiện
+5. Tổng hợp kết quả và đưa ra đánh giá chuyên môn
+
+Khi trả lời:
+- Mô tả chi tiết các polyp được phát hiện (vị trí, kích thước, đặc điểm)
+- Đưa ra đánh giá về mức độ tin cậy của phát hiện
+- Nếu không phát hiện polyp, hãy xác nhận điều đó và giải thích lý do có thể
+
+Bạn phải trả về JSON với định dạng:
+```json
+{
+  "detector_result": {
+    "success": true/false,
+    "count": number_of_polyps,
+    "objects": [...list of objects...],
+    "analysis": "nhận xét chuyên môn về kết quả phát hiện",
+    "visualization_base64": "base64_image_if_available"
+  }
+}
+```"""
+
     def initialize(self) -> bool:
-        """Load YOLO model."""
+        """Khởi tạo agent và các công cụ."""
         try:
-            from ultralytics import YOLO
-            self.logger.info(f"Loading YOLO model from {self.model_path}")
-            self.model = YOLO(self.model_path)
-            self.model.to(self.device)
+            # Tools are already initialized in _register_tools
             self.initialized = True
             return True
         except Exception as e:
-            self.logger.error(f"Failed to load YOLO model: {str(e)}")
+            self.logger.error(f"Failed to initialize detector agent: {str(e)}")
             self.initialized = False
             return False
     
-    def _process_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Process state to detect objects in image."""
-        if not state.get("image_path"):
-            return {**state, "detector_result": {"success": False, "error": "No image path provided"}}
-        
-        image_path = state["image_path"]
-        image = self.load_image(image_path)
-        
-        if image is None:
-            return {**state, "detector_result": {"success": False, "error": "Failed to load image"}}
-        
-        # Run detection
-        results = self.model.predict(
-            source=image,
-            conf=self.confidence_threshold,
-            iou=0.45,   # IoU threshold
-            max_det=100,  # Maximum detections
-            verbose=False
-        )
-        
-        # Process results
-        detections = []
-        for result in results:
-            boxes = result.boxes
-            for box in boxes:
-                xyxy = box.xyxy[0].cpu().numpy()  # [x1, y1, x2, y2]
-                conf = float(box.conf[0].item())
-                cls_id = int(box.cls[0].item())
-                cls_name = result.names[cls_id]
-                
-                # Calculate additional metrics
-                x1, y1, x2, y2 = xyxy.tolist()
-                width = x2 - x1
-                height = y2 - y1
-                center_x = (x1 + x2) / 2
-                center_y = (y1 + y2) / 2
-                area = width * height
-                
-                # Determine position in image
-                img_width, img_height = image.size
-                position_x = "left" if center_x < img_width/3 else ("right" if center_x > 2*img_width/3 else "center")
-                position_y = "top" if center_y < img_height/3 else ("bottom" if center_y > 2*img_height/3 else "middle")
-                position_description = f"{position_y} {position_x}"
-                
-                detection = {
-                    "bbox": xyxy.tolist(),
-                    "confidence": conf,
-                    "class_id": cls_id,
-                    "class_name": cls_name,
-                    "width": width,
-                    "height": height,
-                    "center": [center_x, center_y],
-                    "area": area,
-                    "position_description": position_description
-                }
-                detections.append(detection)
-        
-        # Sort by confidence
-        detections = sorted(detections, key=lambda x: x["confidence"], reverse=True)
-        
-        # Create result
-        detector_result: DetectionResult = {
-            "success": True,
-            "objects": detections,
-            "count": len(detections)
+    def _extract_task_input(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract task-specific input from state."""
+        return {
+            "image_path": state.get("image_path", ""),
+            "query": state.get("query", ""),
+            "medical_context": state.get("medical_context", {})
         }
-        
-        return {**state, "detector_result": detector_result}
     
-    def get_detection_description(self, detections: List[Dict[str, Any]]) -> str:
-        """Get textual description of detections."""
-        if not detections:
-            return "No polyps or abnormalities detected in the image."
+    def _format_task_input(self, task_input: Dict[str, Any]) -> str:
+        """Format task input for LLM prompt."""
+        image_path = task_input.get("image_path", "")
+        query = task_input.get("query", "")
+        context = task_input.get("medical_context", {})
         
-        description = f"Detected {len(detections)} polyp(s) in the image.\n"
+        context_str = "\n".join([f"{k}: {v}" for k, v in context.items()]) if context else "None"
         
-        for i, det in enumerate(detections[:3]):  # Top 3 detections
-            confidence = det.get("confidence", 0) * 100
-            position = det.get("position_description", "unknown location")
-            size_desc = "large" if det.get("area", 0) > 5000 else ("medium" if det.get("area", 0) > 2000 else "small")
+        return f"""Hình ảnh cần phân tích: {image_path}
+        
+Yêu cầu: {query if query else "Phát hiện polyp trong hình ảnh"}
+
+Thông tin y tế bổ sung:
+{context_str}
+
+Hãy phân tích hình ảnh này để tìm polyp. Sử dụng các công cụ có sẵn để phát hiện và phân tích.
+Trả lời theo định dạng:
+
+Tool: [tên công cụ]
+Parameters: [tham số dưới dạng JSON]
+
+Sau khi sử dụng công cụ, hãy phân tích kết quả và đưa ra nhận xét chuyên môn.
+"""
+    
+    def _extract_agent_result(self, synthesis: str) -> Dict[str, Any]:
+        """Extract agent result from LLM synthesis."""
+        try:
+            # Try to extract JSON
+            json_start = synthesis.find('{')
+            json_end = synthesis.rfind('}') + 1
             
-            description += f"Polyp {i+1}: {size_desc} size, {confidence:.1f}% confidence, located in {position}.\n"
-        
-        if len(detections) > 3:
-            description += f"And {len(detections) - 3} more polyp(s).\n"
-        
-        return description
+            if json_start >= 0 and json_end > json_start:
+                json_str = synthesis[json_start:json_end]
+                detector_result = json.loads(json_str)
+                return detector_result
+            
+            # Fallback: Create result from synthesis text
+            return {
+                "detector_result": {
+                    "success": True,
+                    "analysis": synthesis,
+                    "count": 0,
+                    "objects": []
+                }
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Failed to extract agent result: {str(e)}")
+            return {
+                "detector_result": {
+                    "success": False,
+                    "error": str(e),
+                    "analysis": synthesis
+                }
+            }

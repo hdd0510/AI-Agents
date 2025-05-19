@@ -16,7 +16,7 @@ from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain.schema import StrOutputParser
 
-from medical_ai_system.config import SystemState, TaskType, ReflectionResult
+from medical_ai_agents.config import SystemState, TaskType, ReflectionResult
 
 # Task Analyzer Node
 def task_analyzer(state: SystemState, llm: ChatOpenAI) -> Dict:

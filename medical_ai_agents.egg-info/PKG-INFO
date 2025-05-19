@@ -1,3 +1,47 @@
+Metadata-Version: 2.4
+Name: medical-ai-agents
+Version: 1.0.0
+Summary: Hệ thống AI y tế đa agent sử dụng LangGraph
+Home-page: https://github.com/yourusername/medical-ai-agents
+Author: Your Name
+Author-email: your.email@example.com
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Healthcare Industry
+Classifier: Intended Audience :: Science/Research
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Classifier: Topic :: Scientific/Engineering :: Medical Science Apps.
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: langgraph>=0.0.15
+Requires-Dist: langchain>=0.0.267
+Requires-Dist: langchain-openai>=0.0.2
+Requires-Dist: torch>=2.0.0
+Requires-Dist: torchvision>=0.15.0
+Requires-Dist: pillow>=9.0.0
+Requires-Dist: numpy>=1.20.0
+Requires-Dist: opencv-python>=4.5.0
+Requires-Dist: ultralytics>=8.0.0
+Requires-Dist: matplotlib>=3.4.0
+Requires-Dist: tqdm>=4.60.0
+Requires-Dist: pydantic>=2.0.0
+Requires-Dist: fastapi>=0.95.0
+Requires-Dist: uvicorn>=0.22.0
+Requires-Dist: python-multipart>=0.0.5
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
+
 # Medical AI System - LangGraph
 
 Hệ thống AI y tế đa agent sử dụng LangGraph để phân tích hình ảnh nội soi tiêu hóa, hỗ trợ phát hiện và phân loại polyp, đồng thời trả lời các câu hỏi y tế với cơ chế reflection để giảm thiểu bias.
