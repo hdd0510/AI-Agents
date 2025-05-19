@@ -17,8 +17,7 @@ Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
 Classifier: Topic :: Scientific/Engineering :: Medical Science Apps.
 Requires-Python: >=3.8
 Description-Content-Type: text/markdown
-Requires-Dist: langgraph>=0.4.5
-Requires-Dist: langgraph-checkpoint>=0.0.1
+Requires-Dist: langgraph>=0.0.15
 Requires-Dist: langchain>=0.0.267
 Requires-Dist: langchain-openai>=0.0.2
 Requires-Dist: torch>=2.0.0

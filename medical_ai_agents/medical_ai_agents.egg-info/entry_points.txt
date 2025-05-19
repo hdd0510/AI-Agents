@@ -1,0 +1,2 @@
+[console_scripts]
+medical-ai = medical_ai_agents.cli:main

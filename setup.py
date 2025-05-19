@@ -13,14 +13,14 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name="medical-ai-agents",
+    name="medical_ai_agents",
     version="1.0.0",
     author="Your Name",
     author_email="your.email@example.com",
     description="Hệ thống AI y tế đa agent sử dụng LangGraph",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/medical-ai-agents",
+    url="https://github.com/hdd0510/medical_ai_agents",
     packages=find_packages(),
     classifiers=[
         "Development Status :: 4 - Beta",
@@ -36,7 +36,8 @@ setup(
     ],
     python_requires=">=3.8",
     install_requires=[
-        "langgraph>=0.0.15",
+        "langgraph>=0.4.5",
+        "langgraph-checkpoint>=0.0.1",
         "langchain>=0.0.267",
         "langchain-openai>=0.0.2",
         "torch>=2.0.0",
