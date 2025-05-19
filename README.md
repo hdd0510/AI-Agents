@@ -41,8 +41,8 @@ Hệ thống sử dụng LangGraph để tạo và quản lý luồng công vi�
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/medical-ai-system.git
-cd medical-ai-system
+git clone https://github.com/yourusername/medical-ai-agents.git
+cd medical-ai-agents
 
 # Tạo môi trường virtual
 python -m venv venv
