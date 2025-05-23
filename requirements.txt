@@ -13,6 +13,11 @@ langgraph>=0.4.5
 langgraph-checkpoint>=0.0.1
 langchain-openai>=0.0.2
 
+# LLaVA dependencies
+git+https://github.com/haotian-liu/LLaVA.git
+peft>=0.4.0
+accelerate>=0.21.0
+
 fastapi>=0.95.0
 uvicorn>=0.22.0
 python-multipart>=0.0.5

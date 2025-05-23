@@ -41,7 +41,7 @@ Hệ thống sử dụng LangGraph để tạo và quản lý luồng công vi�
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/medical-ai-agents.git
+git clone https://github.com/hdd0510/medical-ai-agents.git
 cd medical-ai-agents
 
 # Tạo môi trường virtual
@@ -76,8 +76,8 @@ from medical_ai_agents import MedicalAISystem, MedicalGraphConfig
 config = MedicalGraphConfig(
     device="cuda",  # hoặc "cpu"
     use_reflection=True,
-    detector_model_path="weights/detect_best.pt",
-    vqa_model_path="weights/llava-med-mistral-v1.5-7b"
+    detector_model_path="medical_ai_agents/weights/detect_best.pt",
+    vqa_model_path="medical_ai_agents/weights/llava-med-mistral-v1.5-7b"
 )
 
 # Khởi tạo hệ thống
@@ -134,3 +134,5 @@ curl -X POST "http://localhost:8000/analyze" \
 ## License
 
 [MIT License](LICENSE)
+
+medical-ai analyze --image /mnt/dunghd/medical-ai-agents/medical_ai_agents/data/test.png --query "Is there any polyp?" --device cuda:1

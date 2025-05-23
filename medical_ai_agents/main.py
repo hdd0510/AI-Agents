@@ -58,7 +58,7 @@ class MedicalAISystem:
             return {"error": f"Image not found: {image_path}", "success": False}
         
         # Create initial state
-        from config import SystemState
+        from medical_ai_agents.config import SystemState
         import uuid
         import time
         

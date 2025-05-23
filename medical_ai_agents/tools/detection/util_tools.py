@@ -19,8 +19,12 @@ from medical_ai_agents.tools.base_tools import BaseTool
 class VisualizationTool(BaseTool):
     """Tool để visualize các detection với bounding box."""
     
-    name: str = "visualize_detections"
-    description: str = "Tạo hình ảnh visualization các polyp được phát hiện với bounding box và nhãn."
+    def __init__(self, **kwargs):
+        """Initialize the visualization tool."""
+        super().__init__(
+            name="visualize_detections",
+            description="Tạo hình ảnh visualization các polyp được phát hiện với bounding box và nhãn."
+        )
     
     def _run(self, image_path: str, detections: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Visualize detections on image."""

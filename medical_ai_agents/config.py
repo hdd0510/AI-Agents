@@ -88,10 +88,10 @@ class MedicalGraphConfig:
     use_reflection: bool = True
     
     # Paths to models
-    detector_model_path: str = "weights/detect_best.pt"
-    modality_classifier_path: str = "weights/modal_best.pt"
-    region_classifier_path: str = "weights/location_best.pt"
-    vqa_model_path: str = "weights/llava-med-mistral-v1.5-7b"
+    detector_model_path: str = "medical_ai_agents/weights/detect_best.pt"
+    modality_classifier_path: str = "medical_ai_agents/weights/modal_best.pt"
+    region_classifier_path: str = "medical_ai_agents/weights/location_best.pt"
+    vqa_model_path: str = "medical_ai_agents/weights/llava-med-mistral-v1.5-7b"
     
     # LLM config
     llm_model: str = "gpt-4"

@@ -27,8 +27,10 @@ class VQAAgent(BaseAgent):
             llm_model: Mô hình LLM sử dụng làm controller
             device: Device để chạy model (cuda/cpu)
         """
-        super().__init__(name="VQA Agent", llm_model=llm_model, device=device)
+        # Set attributes before super().__init__()
         self.model_path = model_path
+        
+        super().__init__(name="VQA Agent", llm_model=llm_model, device=device)
         self.llava_tool = None
     
     def _register_tools(self) -> List[BaseTool]:

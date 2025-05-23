@@ -17,12 +17,13 @@ from medical_ai_agents.tools.base_tools import BaseTool
 class YOLODetectionTool(BaseTool):
     """Tool thực hiện detection YOLO."""
     
-    name: str = "yolo_detection"
-    description: str = "Phát hiện polyp và đối tượng trong hình ảnh nội soi sử dụng YOLO."
-    
     def __init__(self, model_path: str, device: str = "cuda", confidence_threshold: float = 0.25, **kwargs):
         """Initialize the YOLO detection tool."""
-        super().__init__(name=self.name, description=self.description)
+        # Initialize with name and description first
+        super().__init__(
+            name="yolo_detection",
+            description="Phát hiện polyp và đối tượng trong hình ảnh nội soi sử dụng YOLO."
+        )
         self.model_path = model_path
         self.device = device
         self.confidence_threshold = confidence_threshold

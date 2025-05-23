@@ -30,10 +30,12 @@ class ClassifierAgent(BaseAgent):
             llm_model: Mô hình LLM sử dụng làm controller
             device: Device để chạy model (cuda/cpu)
         """
-        super().__init__(name=f"{classifier_type.capitalize()} Classifier Agent", llm_model=llm_model, device=device)
+        # Set attributes before super().__init__()
         self.model_path = model_path
         self.class_names = class_names
         self.classifier_type = classifier_type
+        
+        super().__init__(name=f"{classifier_type.capitalize()} Classifier Agent", llm_model=llm_model, device=device)
         self.classifier_tool = None
     
     def _register_tools(self) -> List[BaseTool]:

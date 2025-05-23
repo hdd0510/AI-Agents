@@ -86,11 +86,50 @@ def create_medical_ai_graph(config: MedicalGraphConfig):
     
     # Add edges
     workflow.set_entry_point("task_analyzer")
-    workflow.add_edge("task_analyzer", task_router)
-    workflow.add_edge("detector", post_detector_router)
-    workflow.add_edge("modality_classifier", post_modality_router)
-    workflow.add_edge("region_classifier", post_region_router)
-    workflow.add_edge("vqa", post_vqa_router)
+    workflow.add_conditional_edges(
+        "task_analyzer",
+        task_router,
+        {
+            "detector": "detector",
+            "modality_classifier": "modality_classifier",
+            "region_classifier": "region_classifier",
+            "vqa": "vqa",
+            "synthesizer": "synthesizer"
+        }
+    )
+    workflow.add_conditional_edges(
+        "detector",
+        post_detector_router,
+        {
+            "modality_classifier": "modality_classifier",
+            "vqa": "vqa",
+            "synthesizer": "synthesizer"
+        }
+    )
+    workflow.add_conditional_edges(
+        "modality_classifier",
+        post_modality_router,
+        {
+            "region_classifier": "region_classifier",
+            "synthesizer": "synthesizer"
+        }
+    )
+    workflow.add_conditional_edges(
+        "region_classifier",
+        post_region_router,
+        {
+            "vqa": "vqa",
+            "synthesizer": "synthesizer"
+        }
+    )
+    workflow.add_conditional_edges(
+        "vqa",
+        post_vqa_router,
+        {
+            "reflection": "reflection",
+            "synthesizer": "synthesizer"
+        }
+    )
     if config.use_reflection:
         workflow.add_edge("reflection", "synthesizer")
     workflow.add_edge("synthesizer", END)

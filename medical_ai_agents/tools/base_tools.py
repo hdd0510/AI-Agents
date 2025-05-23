@@ -17,9 +17,20 @@ class BaseTool(BaseModel):
     name: str
     description: str
     
+    model_config = {
+        "arbitrary_types_allowed": True,
+        "extra": "allow"
+    }
+    
     def __init__(self, **data):
         super().__init__(**data)
-        self.logger = logging.getLogger(f"tool.{self.name}")
+        # Add logger as a private attribute
+        self._logger = logging.getLogger(f"tool.{self.name}")
+    
+    @property
+    def logger(self):
+        """Get the logger instance."""
+        return self._logger
     
     def __call__(self, **kwargs) -> Dict[str, Any]:
         """Execute the tool with given parameters."""

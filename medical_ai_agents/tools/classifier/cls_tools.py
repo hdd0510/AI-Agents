@@ -16,14 +16,13 @@ from medical_ai_agents.tools.base_tools import BaseTool
 class ClassifierTool(BaseTool):
     """Tool phân loại hình ảnh nội soi."""
     
-    name: str
-    description: str
-    
     def __init__(self, model_path: str, class_names: List[str], 
                 classifier_type: str = "modality", device: str = "cuda", **kwargs):
         """Initialize the image classifier tool."""
+        # Set specific name and description based on classifier type
         name = f"{classifier_type}_classifier"
         description = f"Phân loại hình ảnh nội soi theo {classifier_type} (kỹ thuật chụp hoặc vị trí giải phẫu)."
+        
         super().__init__(name=name, description=description)
         self.model_path = model_path
         self.class_names = class_names

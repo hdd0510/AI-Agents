@@ -64,10 +64,17 @@ class BaseAgent(ABC):
     
     def execute_tool(self, tool_name: str, **kwargs) -> Dict[str, Any]:
         """Execute a specific tool by name."""
+        self.logger.info(f"Executing tool: {tool_name} with parameters: {json.dumps(kwargs, indent=2)}")
+        
         for tool in self.tools:
             if tool.name == tool_name:
-                self.logger.info(f"Executing tool: {tool_name}")
-                return tool(**kwargs)
+                try:
+                    result = tool(**kwargs)
+                    self.logger.info(f"Tool {tool_name} execution result: {json.dumps(result, indent=2)}")
+                    return result
+                except Exception as e:
+                    self.logger.error(f"Error executing tool {tool_name}: {str(e)}")
+                    return {"success": False, "error": f"Tool execution failed: {str(e)}"}
         
         return {"success": False, "error": f"Tool '{tool_name}' not found"}
     
@@ -93,6 +100,7 @@ class BaseAgent(ABC):
         """Process state using LLM controller and tools."""
         # Extract relevant information from state
         task_input = self._extract_task_input(state)
+        self.logger.info(f"Task input: {json.dumps(task_input, indent=2)}")
         
         # Let LLM decide which tools to use and how
         messages = [
@@ -103,18 +111,40 @@ class BaseAgent(ABC):
         # Get response from LLM
         response = self.llm.invoke(messages)
         plan = response.content
+        self.logger.info(f"LLM plan: {plan}")
         
         # Parse the plan and execute tools
         tool_calls = self._parse_tool_calls(plan)
+        self.logger.info(f"Parsed tool calls: {json.dumps(tool_calls, indent=2)}")
+        
         results = {}
+        tool_outputs = {}  # Store outputs from each tool
         
         for tool_call in tool_calls:
             tool_name = tool_call.get("tool_name")
             params = tool_call.get("params", {})
             
             if tool_name:
+                self.logger.info(f"Processing tool call: {tool_name}")
+                self.logger.info(f"Initial parameters: {json.dumps(params, indent=2)}")
+                
+                # If this is visualize_detections and we have yolo_detection results
+                if tool_name == "visualize_detections" and "yolo_detection" in tool_outputs:
+                    yolo_result = tool_outputs["yolo_detection"]
+                    self.logger.info(f"Found yolo_detection results: {json.dumps(yolo_result, indent=2)}")
+                    
+                    if yolo_result.get("success", False):
+                        # Use the detections from yolo_detection
+                        params["detections"] = yolo_result.get("objects", [])
+                        self.logger.info(f"Updated parameters with detections: {json.dumps(params, indent=2)}")
+                    else:
+                        self.logger.warning("yolo_detection did not succeed, skipping detections")
+                
+                # Execute the tool
                 tool_result = self.execute_tool(tool_name, **params)
                 results[tool_name] = tool_result
+                tool_outputs[tool_name] = tool_result
+                self.logger.info(f"Tool {tool_name} completed with result: {json.dumps(tool_result, indent=2)}")
         
         # Let LLM synthesize final result
         messages.append(HumanMessage(content=f"Tool results: {json.dumps(results, indent=2)}\n\nPlease synthesize a final result."))

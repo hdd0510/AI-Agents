@@ -17,12 +17,12 @@ from medical_ai_agents.tools.base_tools import BaseTool
 class LLaVATool(BaseTool):
     """Tool sử dụng model LLaVA để trả lời câu hỏi dựa trên hình ảnh."""
     
-    name: str = "llava_vqa"
-    description: str = "Sử dụng LLaVA (Large Language and Vision Assistant) để trả lời câu hỏi dựa trên hình ảnh y tế."
-    
     def __init__(self, model_path: str, device: str = "cuda", **kwargs):
         """Initialize LLaVA tool."""
-        super().__init__(name=self.name, description=self.description)
+        name = "llava_vqa"
+        description = "Sử dụng LLaVA (Large Language and Vision Assistant) để trả lời câu hỏi dựa trên hình ảnh y tế."
+        super().__init__(name=name, description=description)
+        
         self.model_path = model_path
         self.device = device
         self.tokenizer = None
@@ -34,29 +34,25 @@ class LLaVATool(BaseTool):
     
     def _initialize(self) -> bool:
         """Load LLaVA model."""
-        try:
-            # Import LLaVA components
-            from llava.model.builder import load_pretrained_model
-            from llava.mm_utils import get_model_name_from_path
-            from llava.conversation import conv_templates
-            
-            # Get model name
-            model_name = os.path.basename(self.model_path.rstrip('/'))
-            
-            # Load model
-            self.logger.info(f"Loading LLaVA model from {self.model_path}")
-            self.tokenizer, self.model, self.image_processor, self.context_len = \
-                load_pretrained_model(self.model_path, model_name, self.device)
-            
-            # Set conversation template
-            self.conv = conv_templates["llava_v1"].copy()
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Failed to load LLaVA model: {str(e)}")
-            return False
-    
+        # Import LLaVA components
+        from llava.model.builder import load_pretrained_model
+        from llava.mm_utils import get_model_name_from_path
+        from llava.conversation import conv_templates
+        
+        # Get model name
+        model_name = os.path.basename(self.model_path.rstrip('/'))
+        
+        # Load model
+        self.logger.info(f"Loading LLaVA model from {self.model_path}")
+        self.tokenizer, self.model, self.image_processor, self.context_len = \
+            load_pretrained_model(self.model_path, model_name, self.device)
+        
+        # Set conversation template
+        self.conv = conv_templates["llava_v1"].copy()
+        
+        return True
+        
+
     def _run(self, image_path: str, question: str, medical_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Run LLaVA on the image with the given question."""
         if self.model is None:
