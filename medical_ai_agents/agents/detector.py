@@ -14,7 +14,6 @@ import logging
 from medical_ai_agents.agents.base_agent import BaseAgent
 from medical_ai_agents.tools.base_tools import BaseTool
 from medical_ai_agents.tools.detection.yolo_tools import YOLODetectionTool
-from medical_ai_agents.tools.detection.util_tools import VisualizationTool
 
 class DetectorAgent(BaseAgent):
     """Agent phát hiện polyp trong hình ảnh nội soi sử dụng LLM controller."""
@@ -31,14 +30,11 @@ class DetectorAgent(BaseAgent):
         self.model_path = model_path
         super().__init__(name="Detector Agent", llm_model=llm_model, device=device)
         self.yolo_tool = None
-        self.visualize_tool = None
     
     def _register_tools(self) -> List[BaseTool]:
         """Register tools for this agent."""
         self.yolo_tool = YOLODetectionTool(model_path=self.model_path, device=self.device)
-        self.visualize_tool = VisualizationTool()
-        
-        return [self.yolo_tool, self.visualize_tool]
+        return [self.yolo_tool]
     
     def _get_system_prompt(self) -> str:
         """Get the system prompt that defines this agent's role."""
@@ -50,27 +46,17 @@ Bạn có thể sử dụng các công cụ sau theo thứ tự:
    - Tham số: image_path (str), conf_thresh (float, optional)
    - Kết quả: danh sách các polyp với thông tin bbox, confidence, position, v.v.
 
-2. visualize_detections: Tạo hình ảnh visualization các polyp được phát hiện
-   - Tham số: image_path (str), detections (List[Dict]) - phải sử dụng kết quả detections từ yolo_detection
-   - Kết quả: hình ảnh base64 có các bounding box
-
 Quy trình làm việc của bạn PHẢI theo thứ tự sau:
 1. Xác định hình ảnh cần phân tích
 2. Sử dụng công cụ yolo_detection để phát hiện polyp
 3. Lưu lại kết quả detections từ yolo_detection
-4. Sử dụng công cụ visualize_detections với:
-   - image_path giống như đã dùng cho yolo_detection
-   - detections là kết quả từ bước yolo_detection
-5. Phân tích kết quả phát hiện (số lượng, vị trí, kích thước, độ tin cậy)
-6. Tổng hợp kết quả và đưa ra đánh giá chuyên môn
+4. Phân tích kết quả phát hiện (số lượng, vị trí, kích thước, độ tin cậy)
+5. Tổng hợp kết quả và đưa ra đánh giá chuyên môn
 
 Khi trả lời, bạn PHẢI tuân theo định dạng sau:
 ```
 Tool: yolo_detection
 Parameters: {"image_path": "path/to/image.jpg"}
-
-Tool: visualize_detections
-Parameters: {"image_path": "path/to/image.jpg", "detections": [kết quả detections từ yolo_detection]}
 ```
 
 Khi trả lời:
@@ -85,8 +71,7 @@ Bạn phải trả về JSON với định dạng:
     "success": true/false,
     "count": number_of_polyps,
     "objects": [...list of objects...],
-    "analysis": "nhận xét chuyên môn về kết quả phát hiện",
-    "visualization_base64": "base64_image_if_available"
+    "analysis": "nhận xét chuyên môn về kết quả phát hiện"
   }
 }
 ```"""

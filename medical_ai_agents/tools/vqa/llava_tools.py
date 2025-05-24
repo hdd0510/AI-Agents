@@ -44,8 +44,9 @@ class LLaVATool(BaseTool):
         
         # Load model
         self.logger.info(f"Loading LLaVA model from {self.model_path}")
+        model_base = None
         self.tokenizer, self.model, self.image_processor, self.context_len = \
-            load_pretrained_model(self.model_path, model_name, self.device)
+            load_pretrained_model(self.model_path, model_base, model_name, device=self.device)
         
         # Set conversation template
         self.conv = conv_templates["llava_v1"].copy()

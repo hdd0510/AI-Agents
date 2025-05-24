@@ -12,9 +12,10 @@ langchain>=0.0.267
 langgraph>=0.4.5
 langgraph-checkpoint>=0.0.1
 langchain-openai>=0.0.2
+langgraph-sdk>=0.1.69
 
 # LLaVA dependencies
-git+https://github.com/haotian-liu/LLaVA.git
+git+https://github.com/haotian-liu/LLaVA.git@main
 peft>=0.4.0
 accelerate>=0.21.0
 
@@ -28,4 +29,6 @@ scikit-learn>=1.0.0
 tqdm>=4.60.0
 pytest>=7.0.0
 pytest-cov>=4.0.0
-httpx>=0.23.0
+httpx>=0.25.2  # Updated to match langgraph-sdk requirement
+faiss-cpu>=1.7.4
+protobuf>=3.20.0

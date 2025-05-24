@@ -22,3 +22,6 @@ medical_ai_agents/graph/pipeline.py
 medical_ai_agents/graph/routers.py
 medical_ai_agents/tools/__init__.py
 medical_ai_agents/tools/base_tools.py
+medical_ai_agents/tools/rag/__init__.py
+medical_ai_agents/tools/rag/doc_retrieval.py
+medical_ai_agents/tools/rag/vector_search.py

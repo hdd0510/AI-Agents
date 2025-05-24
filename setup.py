@@ -36,22 +36,48 @@ setup(
     ],
     python_requires=">=3.8",
     install_requires=[
+        # Core ML dependencies
+        "torch==2.1.2",
+        "torchvision==0.16.2",
+        "transformers==4.37.2",
+        "tokenizers==0.15.1",
+        "sentencepiece==0.1.99",
+        "accelerate==0.21.0",
+        "peft==0.7.1",
+        "bitsandbytes==0.41.3",
+        
+        # LangChain ecosystem - updated versions
+        "langchain==0.2.0",
+        "langchain-core>=0.2.38",
+        "langchain-community>=0.0.40",
+        "langchain-openai>=0.1.0",
+        "langchain-text-splitters>=0.0.1",
         "langgraph>=0.4.5",
-        "langgraph-checkpoint>=0.0.1",
-        "langchain>=0.0.267",
-        "langchain-openai>=0.0.2",
-        "torch>=2.0.0",
-        "torchvision>=0.15.0",
-        "pillow>=9.0.0",
-        "numpy>=1.20.0",
-        "opencv-python>=4.5.0",
-        "ultralytics>=8.0.0",
-        "matplotlib>=3.4.0",
-        "tqdm>=4.60.0",
-        "pydantic>=2.0.0",
-        "fastapi>=0.95.0",
-        "uvicorn>=0.22.0",
-        "python-multipart>=0.0.5",
+        "langgraph-checkpoint==2.0.26",
+        "pydantic>=2.7.4,<3.0.0",  # Updated to match langgraph requirement
+        
+        # Medical AI + common utils
+        "numpy==1.24.3",
+        "opencv-python==4.8.1.78",
+        "pillow==10.1.0",
+        "matplotlib==3.8.2",
+        "tqdm==4.66.1",
+        "scikit-learn==1.2.2",
+        
+        "uvicorn==0.22.0",
+        "python-multipart==0.0.5",
+        "requests==2.31.0",
+        "httpx==0.24.0",
+        
+
+        
+        # Other dependencies
+        "protobuf==3.20.0",
+        "shortuuid==1.0.11",
+        "markdown2[all]==2.4.10",
+        "einops==0.6.1",
+        "einops-exts==0.0.4",
+        "timm==0.6.13"
     ],
     entry_points={
         "console_scripts": [

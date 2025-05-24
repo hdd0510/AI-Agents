@@ -20,11 +20,15 @@ logging.basicConfig(
 # Import main components
 from medical_ai_agents.config import MedicalGraphConfig, SystemState, TaskType
 from medical_ai_agents.main import MedicalAISystem
+# from medical_ai_agents.tools.rag.vector_search import VectorSearchTool
+# from medical_ai_agents.tools.rag.doc_retrieval import DocumentRetrievalTool
 __all__ = [
     'MedicalGraphConfig',
     'SystemState',
     'TaskType',
-    'MedicalAISystem'
+    'MedicalAISystem',
+    # 'VectorSearchTool',
+    # 'DocumentRetrievalTool'
 ]
 
 # Define package version
