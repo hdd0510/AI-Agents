@@ -30,3 +30,5 @@ markdown2[all]==2.4.10
 einops==0.6.1
 einops-exts==0.0.4
 timm==0.6.13
+
+medical-ai analyze --image /mnt/dunghd/medical-ai-agents/medical_ai_agents/data/test.png --query "Is there any polyp?" --device cuda:1

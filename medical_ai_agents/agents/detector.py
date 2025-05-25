@@ -18,7 +18,7 @@ from medical_ai_agents.tools.detection.yolo_tools import YOLODetectionTool
 class DetectorAgent(BaseAgent):
     """Agent phát hiện polyp trong hình ảnh nội soi sử dụng LLM controller."""
     
-    def __init__(self, model_path: str, llm_model: str = "gpt-4", device: str = "cuda"):
+    def __init__(self, model_path: str, llm_model: str = "gpt-4o-mini", device: str = "cuda"):
         """
         Khởi tạo Detector Agent với LLM controller.
         

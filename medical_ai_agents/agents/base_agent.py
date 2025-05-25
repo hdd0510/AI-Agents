@@ -22,7 +22,7 @@ from medical_ai_agents.tools.base_tools import BaseTool
 class BaseAgent(ABC):
     """Lớp cơ sở cho tất cả các agents với LLM controller."""
     
-    def __init__(self, name: str, llm_model: str = "gpt-4", device: str = "cuda"):
+    def __init__(self, name: str, llm_model: str = "gpt-4o-mini", device: str = "cuda"):
         """Khởi tạo Base Agent với LLM controller."""
         self.name = name
         self.device = device

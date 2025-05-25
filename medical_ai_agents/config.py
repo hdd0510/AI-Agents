@@ -94,7 +94,7 @@ class MedicalGraphConfig:
     vqa_model_path: str = "medical_ai_agents/weights/llava-med-mistral-v1.5-7b"
     
     # LLM config
-    llm_model: str = "gpt-4"
+    llm_model: str = "gpt-4o-mini"
     llm_temperature: float = 0.2
     
     # LangGraph config

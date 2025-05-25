@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Medical AI Agents - VQA Agent
+FIXED: Medical AI Agents - VQA Agent
 ---------------------------
 Agent trả lời câu hỏi về hình ảnh với LLM controller và LLaVA tool.
 """
@@ -10,6 +10,7 @@ Agent trả lời câu hỏi về hình ảnh với LLM controller và LLaVA too
 import json
 from typing import Dict, Any, List
 import logging
+import re
 
 from medical_ai_agents.agents.base_agent import BaseAgent
 from medical_ai_agents.tools.base_tools import BaseTool
@@ -19,7 +20,7 @@ from langchain.schema import SystemMessage, HumanMessage
 class VQAAgent(BaseAgent):
     """Agent trả lời câu hỏi về hình ảnh y tế sử dụng LLM controller."""
     
-    def __init__(self, model_path: str, llm_model: str = "gpt-4", device: str = "cuda"):
+    def __init__(self, model_path: str, llm_model: str = "gpt-4o-mini", device: str = "cuda"):
         """
         Khởi tạo VQA Agent với LLM controller.
         
@@ -56,12 +57,12 @@ Quy trình làm việc của bạn:
 4. Phân tích câu trả lời và độ tin cậy
 5. Nâng cao chất lượng câu trả lời với kiến thức y tế chuyên môn
 
-Khi trả lời:
-- Đảm bảo câu trả lời có tính chuyên môn y tế cao
-- Chỉ ra những điểm không chắc chắn nếu có
-- Sử dụng ngôn ngữ phù hợp với chuyên gia y tế
+QUAN TRỌNG: Bạn PHẢI trả lời theo định dạng sau:
 
-Bạn phải trả về JSON với định dạng:
+Tool: llava_vqa
+Parameters: {"image_path": "path/to/image", "question": "câu hỏi", "medical_context": {}}
+
+Sau đó phân tích kết quả và trả về JSON cuối cùng theo format:
 ```json
 {
   "vqa_result": {
@@ -144,42 +145,164 @@ Thông tin y tế bổ sung:
 Hãy sử dụng công cụ llava_vqa để trả lời câu hỏi này dựa trên hình ảnh.
 Cần đảm bảo câu trả lời có tính chuyên môn cao và chính xác về mặt y tế.
 
-Trả lời theo định dạng:
+Trả lời theo định dạng sau:
 
 Tool: llava_vqa
-Parameters: {{
-    "image_path": "{image_path}",
-    "question": "{query if query else "Mô tả những gì bạn thấy trong hình ảnh này"}",
-    "medical_context": {json.dumps(context)}
-}}
+Parameters: {{"image_path": "{image_path}", "question": "{query if query else 'Mô tả những gì bạn thấy trong hình ảnh này'}", "medical_context": {json.dumps(context)}}}
 
-Sau khi sử dụng công cụ, hãy phân tích kết quả và đưa ra câu trả lời cuối cùng với độ tin cậy.
-"""
+Sau khi sử dụng công cụ, hãy phân tích kết quả và đưa ra câu trả lời cuối cùng với độ tin cậy."""
+    
+    def _parse_tool_calls(self, plan: str) -> List[Dict[str, Any]]:
+        """Enhanced parsing for VQA agent - handle both formats."""
+        tool_calls = []
+        
+        # Method 1: Standard format parsing
+        lines = plan.split("\n")
+        current_tool = None
+        current_params = {}
+        
+        for line in lines:
+            line = line.strip()
+            if line.startswith("Tool:"):
+                # Save previous tool if exists
+                if current_tool:
+                    tool_calls.append({
+                        "tool_name": current_tool,
+                        "params": current_params
+                    })
+                
+                # Start new tool
+                current_tool = line.replace("Tool:", "").strip()
+                current_params = {}
+            
+            elif line.startswith("Parameters:"):
+                # Try to parse JSON parameters
+                try:
+                    params_text = line.replace("Parameters:", "").strip()
+                    if params_text.startswith("{") and params_text.endswith("}"):
+                        current_params = json.loads(params_text)
+                except Exception as e:
+                    self.logger.warning(f"Failed to parse parameters: {line}, error: {e}")
+        
+        # Add last tool
+        if current_tool:
+            tool_calls.append({
+                "tool_name": current_tool,
+                "params": current_params
+            })
+        
+        # Method 2: If no standard format found, try regex extraction
+        if not tool_calls:
+            # Look for llava_vqa tool mentions
+            llava_pattern = r'llava_vqa.*?[\{]([^}]+)[\}]'
+            matches = re.findall(llava_pattern, plan, re.DOTALL | re.IGNORECASE)
+            
+            for match in matches:
+                try:
+                    # Clean up the match and try to parse as JSON
+                    param_str = "{" + match + "}"
+                    params = json.loads(param_str)
+                    tool_calls.append({
+                        "tool_name": "llava_vqa",
+                        "params": params
+                    })
+                except Exception as e:
+                    self.logger.warning(f"Failed to parse regex match: {match}, error: {e}")
+        
+        # Method 3: Fallback - if still no tools, create default call
+        if not tool_calls:
+            self.logger.warning("No tool calls parsed, creating default llava_vqa call")
+            # Extract image_path and question from the plan
+            image_path = ""
+            question = ""
+            
+            # Try to extract from the plan text
+            image_matches = re.findall(r'image_path["\s]*:["\s]*([^"]+)', plan)
+            if image_matches:
+                image_path = image_matches[0]
+            
+            question_matches = re.findall(r'question["\s]*:["\s]*([^"]+)', plan)
+            if question_matches:
+                question = question_matches[0]
+            
+            # If we found both, create the tool call
+            if image_path and question:
+                tool_calls.append({
+                    "tool_name": "llava_vqa",
+                    "params": {
+                        "image_path": image_path,
+                        "question": question,
+                        "medical_context": {}
+                    }
+                })
+        
+        self.logger.info(f"[VQA] Parsed {len(tool_calls)} tool calls")
+        return tool_calls
     
     def _extract_agent_result(self, synthesis: str) -> Dict[str, Any]:
         """Extract agent result from LLM synthesis."""
         try:
-            # Try to extract JSON
+            # Try to extract JSON from synthesis
             json_start = synthesis.find('{')
             json_end = synthesis.rfind('}') + 1
             
             if json_start >= 0 and json_end > json_start:
                 json_str = synthesis[json_start:json_end]
                 vqa_result = json.loads(json_str)
+                self.logger.info(f"[VQA] Successfully extracted JSON result")
                 return vqa_result
+            
+            # If no JSON found, look for key information in text
+            self.logger.warning("[VQA] No JSON found in synthesis, parsing text")
+            
+            # Try to extract answer and confidence from text
+            answer = ""
+            confidence = 0.7
+            
+            # Look for answer patterns
+            answer_patterns = [
+                r'answer["\s]*:["\s]*([^"]+)',
+                r'Answer[:\s]+([^\n]+)',
+                r'câu trả lời[:\s]+([^\n]+)',
+            ]
+            
+            for pattern in answer_patterns:
+                matches = re.findall(pattern, synthesis, re.IGNORECASE)
+                if matches:
+                    answer = matches[0].strip()
+                    break
+            
+            # Look for confidence patterns
+            conf_patterns = [
+                r'confidence["\s]*:["\s]*([0-9.]+)',
+                r'độ tin cậy[:\s]+([0-9.]+)',
+            ]
+            
+            for pattern in conf_patterns:
+                matches = re.findall(pattern, synthesis, re.IGNORECASE)
+                if matches:
+                    try:
+                        confidence = float(matches[0])
+                        break
+                    except:
+                        pass
+            
+            # If still no answer found, use the whole synthesis as answer
+            if not answer:
+                answer = synthesis
             
             # Fallback: Create result from synthesis text
             return {
                 "vqa_result": {
                     "success": True,
-                    "answer": synthesis,
-                    "confidence": 0.7,
-                    "analysis": "Generated from LLM synthesis"
+                    "answer": answer,
+                    "confidence": confidence,
+                    "analysis": "Generated from LLM synthesis parsing"
                 }
             }
             
         except Exception as e:
-            self.logger.error(f"Failed to extract agent result: {str(e)}")
+            self.logger.error(f"[VQA] Failed to extract agent result: {str(e)}")
             return {
                 "vqa_result": {
                     "success": False,
@@ -228,7 +351,7 @@ Sau khi sử dụng công cụ, hãy phân tích kết quả và đưa ra câu t
                 self.logger.info(f"[VQA] Tool {tool_name} completed with result: {json.dumps(tool_result, indent=2)}")
         
         # Let LLM synthesize final result
-        messages.append(HumanMessage(content=f"Tool results: {json.dumps(results, indent=2)}\n\nPlease synthesize a final result."))
+        messages.append(HumanMessage(content=f"Tool results: {json.dumps(results, indent=2)}\n\nPlease synthesize a final result in the required JSON format."))
         synthesis_response = self.llm.invoke(messages)
         self.logger.info(f"[VQA] Synthesis response: {synthesis_response.content}")
         

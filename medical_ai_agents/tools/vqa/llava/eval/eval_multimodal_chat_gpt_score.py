@@ -52,7 +52,7 @@ def chunk(lst, n):
 
 
 def infer(samples):
-    model_inst = llm.GPT("gpt-4-0314")
+    model_inst = llm.GPT("gpt-4o-mini")
 
     BATCH_SIZE = 1
     batch_samples = []

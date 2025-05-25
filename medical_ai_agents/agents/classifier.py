@@ -19,7 +19,7 @@ class ClassifierAgent(BaseAgent):
     """Agent phân loại hình ảnh nội soi sử dụng LLM controller."""
     
     def __init__(self, model_path: str, class_names: List[str], 
-                classifier_type: str = "modality", llm_model: str = "gpt-4", device: str = "cuda"):
+                classifier_type: str = "modality", llm_model: str = "gpt-4o-mini", device: str = "cuda"):
         """
         Khởi tạo Classifier Agent với LLM controller.
         

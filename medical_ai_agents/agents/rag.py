@@ -296,7 +296,7 @@ class RAGAgent(BaseAgent):
     
     def __init__(self, working_dir: str = "./rag_storage", 
                  knowledge_base_path: Optional[str] = None,
-                 llm_model: str = "gpt-4", device: str = "cuda"):
+                 llm_model: str = "gpt-4o-mini", device: str = "cuda"):
         """
         Khởi tạo RAG Agent với LightRAG.
         
