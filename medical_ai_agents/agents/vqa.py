@@ -14,6 +14,7 @@ import logging
 from medical_ai_agents.agents.base_agent import BaseAgent
 from medical_ai_agents.tools.base_tools import BaseTool
 from medical_ai_agents.tools.vqa.llava_tools import LLaVATool
+from langchain.schema import SystemMessage, HumanMessage
 
 class VQAAgent(BaseAgent):
     """Agent trả lời câu hỏi về hình ảnh y tế sử dụng LLM controller."""
@@ -145,8 +146,12 @@ Cần đảm bảo câu trả lời có tính chuyên môn cao và chính xác v
 
 Trả lời theo định dạng:
 
-Tool: [tên công cụ]
-Parameters: [tham số dưới dạng JSON]
+Tool: llava_vqa
+Parameters: {{
+    "image_path": "{image_path}",
+    "question": "{query if query else "Mô tả những gì bạn thấy trong hình ảnh này"}",
+    "medical_context": {json.dumps(context)}
+}}
 
 Sau khi sử dụng công cụ, hãy phân tích kết quả và đưa ra câu trả lời cuối cùng với độ tin cậy.
 """
@@ -183,3 +188,51 @@ Sau khi sử dụng công cụ, hãy phân tích kết quả và đưa ra câu t
                     "confidence": 0.5
                 }
             }
+
+    def _process_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Process state using LLM controller and tools."""
+        # Extract relevant information from state
+        task_input = self._extract_task_input(state)
+        self.logger.info(f"[VQA] Task input: {json.dumps(task_input, indent=2)}")
+        
+        # Let LLM decide which tools to use and how
+        messages = [
+            SystemMessage(content=self.system_prompt),
+            HumanMessage(content=self._format_task_input(task_input))
+        ]
+        
+        # Get response from LLM
+        response = self.llm.invoke(messages)
+        plan = response.content
+        self.logger.info(f"[VQA] LLM plan: {plan}")
+        
+        # Parse the plan and execute tools
+        tool_calls = self._parse_tool_calls(plan)
+        self.logger.info(f"[VQA] Parsed tool calls: {json.dumps(tool_calls, indent=2)}")
+        
+        results = {}
+        tool_outputs = {}
+        
+        for tool_call in tool_calls:
+            tool_name = tool_call.get("tool_name")
+            params = tool_call.get("params", {})
+            
+            if tool_name:
+                self.logger.info(f"[VQA] Processing tool call: {tool_name}")
+                self.logger.info(f"[VQA] Initial parameters: {json.dumps(params, indent=2)}")
+                
+                # Execute the tool
+                tool_result = self.execute_tool(tool_name, **params)
+                results[tool_name] = tool_result
+                tool_outputs[tool_name] = tool_result
+                self.logger.info(f"[VQA] Tool {tool_name} completed with result: {json.dumps(tool_result, indent=2)}")
+        
+        # Let LLM synthesize final result
+        messages.append(HumanMessage(content=f"Tool results: {json.dumps(results, indent=2)}\n\nPlease synthesize a final result."))
+        synthesis_response = self.llm.invoke(messages)
+        self.logger.info(f"[VQA] Synthesis response: {synthesis_response.content}")
+        
+        # Return agent result
+        agent_result = self._extract_agent_result(synthesis_response.content)
+        self.logger.info(f"[VQA] Final agent result: {json.dumps(agent_result, indent=2)}")
+        return {**state, **agent_result}

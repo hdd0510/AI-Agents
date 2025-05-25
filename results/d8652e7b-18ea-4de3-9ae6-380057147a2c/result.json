@@ -1,0 +1,30 @@
+{
+  "task_type": "polyp_detection",
+  "success": true,
+  "session_id": "d8652e7b-18ea-4de3-9ae6-380057147a2c",
+  "query": "Is there any polyp?",
+  "polyps": [
+    {
+      "bbox": [
+        121.51744842529297,
+        109.02606964111328,
+        222.9114990234375,
+        182.5685577392578
+      ],
+      "confidence": 0.8890905976295471,
+      "class_id": 0,
+      "class_name": "polyp",
+      "width": 101.39405059814453,
+      "height": 73.54248809814453,
+      "center": [
+        172.21447372436523,
+        145.79731369018555
+      ],
+      "area": 7456.770759336709,
+      "position_description": "middle center"
+    }
+  ],
+  "polyp_count": 1,
+  "processing_time": 50.08511471748352,
+  "answer": "Có, chúng tôi đã phát hiện ra 1 polyp trong quá trình phân tích."
+}

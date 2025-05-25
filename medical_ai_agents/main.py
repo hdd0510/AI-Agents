@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Medical AI System - Main Entry Point
+Medical AI System - Main Entry Point (FIXED)
 -----------------------------------
 Điểm vào chính của hệ thống AI y tế đa agent sử dụng LangGraph.
 """
@@ -71,13 +71,22 @@ class MedicalAISystem:
         }
         
         try:
-            # Run the graph
+            # Run the graph và lấy state cuối cùng
+            final_state = None
             for event in self.graph.stream(initial_state):
-                # Process events for debugging or progress tracking
-                self.logger.debug(f"Step completed: {event}")
+                # event là một dict với key là tên node và value là state sau khi node đó chạy
+                self.logger.debug(f"Step completed: {list(event.keys())}")
+                # Lưu state cuối cùng
+                for node_name, state in event.items():
+                    final_state = state
             
-            # Get the final state
-            final_state = event
+            # Kiểm tra final_state
+            if final_state is None:
+                return {
+                    "error": "Graph execution failed - no final state",
+                    "success": False,
+                    "session_id": initial_state["session_id"]
+                }
             
             # Create output directory if needed
             if self.config.output_path:
@@ -91,10 +100,58 @@ class MedicalAISystem:
                         json.dump(final_state["final_result"], f, ensure_ascii=False, indent=2)
             
             # Return final result
-            if "final_result" in final_state:
+            if "final_result" in final_state and final_state["final_result"]:
                 return final_state["final_result"]
             else:
-                return {"error": "Analysis failed to produce a result", "success": False}
+                # Fallback: tạo result từ các thành phần có sẵn
+                fallback_result = {
+                    "success": True,
+                    "session_id": final_state.get("session_id", ""),
+                    "task_type": final_state.get("task_type", "unknown"),
+                    "query": final_state.get("query", ""),
+                    "processing_time": time.time() - initial_state["start_time"]
+                }
+                
+                # Thêm detector result nếu có
+                if "detector_result" in final_state:
+                    detector_result = final_state["detector_result"]
+                    if detector_result and detector_result.get("success", False):
+                        fallback_result["polyps"] = detector_result.get("objects", [])
+                        fallback_result["polyp_count"] = len(detector_result.get("objects", []))
+                    else:
+                        fallback_result["polyps"] = []
+                        fallback_result["polyp_count"] = 0
+                
+                # Thêm classification results nếu có
+                if "modality_result" in final_state:
+                    modality_result = final_state["modality_result"]
+                    if modality_result and modality_result.get("success", False):
+                        fallback_result["modality"] = {
+                            "class_name": modality_result.get("class_name", "unknown"),
+                            "confidence": modality_result.get("confidence", 0.0)
+                        }
+                
+                if "region_result" in final_state:
+                    region_result = final_state["region_result"]
+                    if region_result and region_result.get("success", False):
+                        fallback_result["region"] = {
+                            "class_name": region_result.get("class_name", "unknown"),
+                            "confidence": region_result.get("confidence", 0.0)
+                        }
+                
+                # Thêm VQA result nếu có
+                if "vqa_result" in final_state:
+                    vqa_result = final_state["vqa_result"]
+                    if vqa_result and vqa_result.get("success", False):
+                        fallback_result["answer"] = vqa_result.get("answer", "")
+                        fallback_result["answer_confidence"] = vqa_result.get("confidence", 0.0)
+                
+                # Check for any errors
+                if "error" in final_state:
+                    fallback_result["error"] = final_state["error"]
+                    fallback_result["success"] = False
+                
+                return fallback_result
             
         except Exception as e:
             import traceback

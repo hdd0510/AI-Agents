@@ -35,18 +35,15 @@ def task_router(state: SystemState) -> str:
 
 # Router after detection
 def post_detector_router(state: SystemState) -> str:
-    """Routes to the next step after detection based on task type."""
-    logger = logging.getLogger("graph.routers.post_detector")
     task_type = state.get("task_type", TaskType.COMPREHENSIVE)
+    query = state.get("query", "")
     
-    logger.info(f"Post-detector routing for task type: {task_type}")
-    
-    if task_type == TaskType.POLYP_DETECTION:
-        return "synthesizer"
-    elif task_type == TaskType.MEDICAL_QA:
+    # Nếu có query (dù task là polyp_detection), vẫn cần VQA để answer
+    if query and query.strip():
         return "vqa"
-    else:  # For other types including COMPREHENSIVE
-        # First go to modality classifier
+    elif task_type == TaskType.POLYP_DETECTION:
+        return "synthesizer"
+    else:
         return "modality_classifier"
 
 

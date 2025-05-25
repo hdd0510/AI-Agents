@@ -1,0 +1,29 @@
+{
+  "task_type": "polyp_detection",
+  "success": true,
+  "session_id": "273c97aa-904a-4d74-a0f7-b3f3a16181ea",
+  "query": "Is there any polyp?",
+  "polyps": [
+    {
+      "bbox": [
+        121.51744842529297,
+        109.02606964111328,
+        222.9114990234375,
+        182.5685577392578
+      ],
+      "confidence": 0.8890905976295471,
+      "class_id": 0,
+      "class_name": "polyp",
+      "width": 101.39405059814453,
+      "height": 73.54248809814453,
+      "center": [
+        172.21447372436523,
+        145.79731369018555
+      ],
+      "area": 7456.770759336709,
+      "position_description": "middle center"
+    }
+  ],
+  "polyp_count": 1,
+  "processing_time": 16.574161767959595
+}

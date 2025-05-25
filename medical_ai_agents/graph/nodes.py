@@ -14,7 +14,7 @@ import time
 
 from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
-from langchain.schema import StrOutputParser
+from langchain.schema import StrOutputParser, HumanMessage
 
 from medical_ai_agents.config import SystemState, TaskType, ReflectionResult
 
@@ -241,7 +241,7 @@ def _needs_reflection(state: SystemState) -> bool:
 
 
 # Result Synthesizer Node
-def result_synthesizer(state: SystemState) -> SystemState:
+def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
     """Synthesizes the final result from all agent outputs."""
     logger = logging.getLogger("graph.nodes.synthesizer")
     
@@ -303,6 +303,25 @@ def result_synthesizer(state: SystemState) -> SystemState:
         final_result["processing_time"] = time.time() - state["start_time"]
     
     logger.info("Result synthesis complete")
+    # Generate natural language answer
+    query = state.get("query", "")
+    if query:
+        prompt = f"""
+        Bạn là bác sĩ chuyên khoa tiêu hóa. Dựa vào kết quả phân tích sau, 
+        hãy trả lời câu hỏi của bệnh nhân một cách chuyên nghiệp:
+        
+        Câu hỏi: {query}
+        
+        Kết quả phân tích:
+        - Số polyp phát hiện: {final_result.get('polyp_count', 0)}
+        - Chi tiết: {final_result.get('polyps', [])}
+        - Kỹ thuật: {final_result.get('modality', {})}
+        
+        Trả lời ngắn gọn, chuyên nghiệp:
+        """
+        
+        answer = llm.invoke([HumanMessage(content=prompt)]).content
+        final_result["answer"] = answer
     
     # Update state
     return {**state, "final_result": final_result}

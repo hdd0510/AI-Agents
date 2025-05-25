@@ -82,7 +82,7 @@ def create_medical_ai_graph(config: MedicalGraphConfig):
     workflow.add_node("vqa", vqa_agent)
     if config.use_reflection:
         workflow.add_node("reflection", lambda state: reflection_node(state, llm))
-    workflow.add_node("synthesizer", result_synthesizer)
+    workflow.add_node("synthesizer", lambda state: result_synthesizer(state, llm))
     
     # Add edges
     workflow.set_entry_point("task_analyzer")
