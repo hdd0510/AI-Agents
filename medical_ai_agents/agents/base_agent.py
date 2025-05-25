@@ -165,16 +165,17 @@ class BaseAgent(ABC):
         pass
     
     def _parse_tool_calls(self, plan: str) -> List[Dict[str, Any]]:
-        """Parse tool calls from LLM response."""
+        """Enhanced parsing for tool calls with better error handling."""
         tool_calls = []
         
-        # Simple parsing logic - extract lines with "Tool: <tool_name>" and "Parameters: <json>"
+        # Method 1: Standard format parsing
         lines = plan.split("\n")
         current_tool = None
         current_params = {}
         
         for line in lines:
-            if line.startswith("Tool:"):
+            line_stripped = line.strip()
+            if line_stripped.startswith("Tool:"):
                 # Save previous tool if exists
                 if current_tool:
                     tool_calls.append({
@@ -183,17 +184,31 @@ class BaseAgent(ABC):
                     })
                 
                 # Start new tool
-                current_tool = line.replace("Tool:", "").strip()
+                current_tool = line_stripped.replace("Tool:", "").strip()
                 current_params = {}
             
-            elif line.startswith("Parameters:"):
+            elif line_stripped.startswith("Parameters:"):
                 # Try to parse JSON parameters
                 try:
-                    params_text = line.replace("Parameters:", "").strip()
-                    if params_text.startswith("{") and params_text.endswith("}"):
-                        current_params = json.loads(params_text)
-                except Exception:
-                    self.logger.warning(f"Failed to parse parameters: {line}")
+                    params_text = line_stripped.replace("Parameters:", "").strip()
+                    
+                    # Handle both single line and multiline JSON
+                    if params_text.startswith("{"):
+                        # Try to find complete JSON
+                        json_str = params_text
+                        if not params_text.endswith("}"):
+                            # Look for closing brace in subsequent lines
+                            line_idx = lines.index(line)
+                            for next_line in lines[line_idx + 1:]:
+                                json_str += " " + next_line.strip()
+                                if "}" in next_line:
+                                    break
+                        
+                        current_params = json.loads(json_str)
+                        
+                except (json.JSONDecodeError, ValueError) as e:
+                    self.logger.warning(f"Failed to parse parameters: {line_stripped}, error: {e}")
+                    current_params = {}
         
         # Add last tool
         if current_tool:
@@ -202,6 +217,31 @@ class BaseAgent(ABC):
                 "params": current_params
             })
         
+        # Method 2: Regex extraction as fallback
+        if not tool_calls:
+            import re
+            
+            # Look for tool patterns
+            tool_pattern = r'Tool:\s*(\w+)'
+            param_pattern = r'Parameters:\s*(\{[^}]*\})'
+            
+            tools = re.findall(tool_pattern, plan)
+            params = re.findall(param_pattern, plan, re.DOTALL)
+            
+            for i, tool in enumerate(tools):
+                param_dict = {}
+                if i < len(params):
+                    try:
+                        param_dict = json.loads(params[i])
+                    except:
+                        pass
+                
+                tool_calls.append({
+                    "tool_name": tool,
+                    "params": param_dict
+                })
+        
+        self.logger.info(f"Parsed {len(tool_calls)} tool calls")
         return tool_calls
     
     @abstractmethod

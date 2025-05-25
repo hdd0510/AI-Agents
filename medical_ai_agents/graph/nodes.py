@@ -256,15 +256,23 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
         "query": state.get("query", "")
     }
     
-    # Include detector results if available
+    # ✅ FIX: Include detector results correctly - check both success and objects
     detector_result = state.get("detector_result", {})
-    if detector_result and detector_result.get("success", False):
+    logger.info(f"Detector result in synthesizer: {detector_result}")
+    
+    if detector_result:
+        # Even if success=False, still check for objects
         objects = detector_result.get("objects", [])
+        
+        # Use objects from detector regardless of success flag
         final_result["polyps"] = objects
         final_result["polyp_count"] = len(objects)
+        
+        logger.info(f"Found {len(objects)} polyps from detector")
     else:
         final_result["polyps"] = []
         final_result["polyp_count"] = 0
+        logger.info("No detector result found")
     
     # Include classifier results if available
     modality_result = state.get("modality_result", {})
@@ -303,28 +311,58 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
         final_result["processing_time"] = time.time() - state["start_time"]
     
     logger.info("Result synthesis complete")
-    # Generate natural language answer
+    
+    # ✅ FIX: Generate natural language answer based on ACTUAL detection results
     query = state.get("query", "")
     if query:
-        prompt = f"""
-        Bạn là bác sĩ chuyên khoa tiêu hóa. Dựa vào kết quả phân tích sau, 
-        hãy trả lời câu hỏi của bệnh nhân một cách chuyên nghiệp:
+        polyp_count = final_result.get('polyp_count', 0)
+        polyps = final_result.get('polyps', [])
         
-        Câu hỏi: {query}
+        if polyp_count > 0:
+            # Has polyps
+            polyp_details = []
+            for i, polyp in enumerate(polyps[:3]):  # Top 3 polyps
+                conf = polyp.get('confidence', 0)
+                pos = polyp.get('position_description', 'unknown position')
+                polyp_details.append(f"Polyp {i+1}: {conf:.2f} confidence at {pos}")
+            
+            prompt = f"""
+            Bạn là bác sĩ chuyên khoa tiêu hóa. Trả lời câu hỏi của bệnh nhân:
+            
+            Câu hỏi: {query}
+            
+            Kết quả phát hiện: Phát hiện {polyp_count} polyp
+            Chi tiết: {'; '.join(polyp_details)}
+            
+            Trả lời ngắn gọn, chuyên nghiệp (1-2 câu):
+            """
+        else:
+            # No polyps
+            prompt = f"""
+            Bạn là bác sĩ chuyên khoa tiêu hóa. Trả lời câu hỏi của bệnh nhân:
+            
+            Câu hỏi: {query}
+            
+            Kết quả phát hiện: Không phát hiện polyp nào
+            
+            Trả lời ngắn gọn, trấn an bệnh nhân (1-2 câu):
+            """
         
-        Kết quả phân tích:
-        - Số polyp phát hiện: {final_result.get('polyp_count', 0)}
-        - Chi tiết: {final_result.get('polyps', [])}
-        - Kỹ thuật: {final_result.get('modality', {})}
-        
-        Trả lời ngắn gọn, chuyên nghiệp:
-        """
-        
-        answer = llm.invoke([HumanMessage(content=prompt)]).content
-        final_result["answer"] = answer
+        try:
+            answer = llm.invoke([HumanMessage(content=prompt)]).content
+            final_result["answer"] = answer
+            logger.info(f"Generated answer: {answer}")
+        except Exception as e:
+            logger.error(f"Failed to generate answer: {str(e)}")
+            # Fallback answer
+            if polyp_count > 0:
+                final_result["answer"] = f"Phát hiện {polyp_count} polyp trong hình ảnh."
+            else:
+                final_result["answer"] = "Không phát hiện polyp nào trong hình ảnh."
     
     # Update state
     return {**state, "final_result": final_result}
+
 
 
 def _generate_summary(result: Dict[str, Any]) -> str:

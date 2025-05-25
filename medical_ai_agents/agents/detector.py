@@ -122,16 +122,42 @@ Sau khi sử dụng công cụ, hãy phân tích kết quả và đưa ra nhận
     def _extract_agent_result(self, synthesis: str) -> Dict[str, Any]:
         """Extract agent result from LLM synthesis."""
         try:
-            # Try to extract JSON
-            json_start = synthesis.find('{')
-            json_end = synthesis.rfind('}') + 1
+            # Enhanced JSON extraction with multiple attempts
+            json_str = None
             
-            if json_start >= 0 and json_end > json_start:
-                json_str = synthesis[json_start:json_end]
+            # Method 1: Find first complete JSON object
+            json_start = synthesis.find('{')
+            if json_start >= 0:
+                brace_count = 0
+                json_end = json_start
+                
+                for i, char in enumerate(synthesis[json_start:], json_start):
+                    if char == '{':
+                        brace_count += 1
+                    elif char == '}':
+                        brace_count -= 1
+                        if brace_count == 0:
+                            json_end = i + 1
+                            break
+                
+                if brace_count == 0:  # Found complete JSON
+                    json_str = synthesis[json_start:json_end]
+            
+            # Method 2: Extract between ```json and ``` if exists
+            if not json_str:
+                import re
+                json_block = re.search(r'```json\s*(\{.*?\})\s*```', synthesis, re.DOTALL)
+                if json_block:
+                    json_str = json_block.group(1)
+            
+            # Parse the JSON
+            if json_str:
                 detector_result = json.loads(json_str)
+                self.logger.info(f"Successfully extracted JSON result")
                 return detector_result
             
-            # Fallback: Create result from synthesis text
+            # Method 3: Fallback - create result from synthesis text
+            self.logger.warning("No JSON found, creating fallback result")
             return {
                 "detector_result": {
                     "success": True,
@@ -141,6 +167,18 @@ Sau khi sử dụng công cụ, hãy phân tích kết quả và đưa ra nhận
                 }
             }
             
+        except json.JSONDecodeError as e:
+            self.logger.error(f"JSON decode error: {str(e)}")
+            self.logger.error(f"Attempted to parse: {json_str}")
+            
+            # Fallback result
+            return {
+                "detector_result": {
+                    "success": False,
+                    "error": f"JSON parsing failed: {str(e)}",
+                    "analysis": synthesis
+                }
+            }
         except Exception as e:
             self.logger.error(f"Failed to extract agent result: {str(e)}")
             return {

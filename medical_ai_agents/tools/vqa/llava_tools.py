@@ -48,6 +48,9 @@ class LLaVATool(BaseTool):
         self.tokenizer, self.model, self.image_processor, self.context_len = \
             load_pretrained_model(self.model_path, model_base, model_name, device=self.device)
         
+        # Ensure model is on the correct device
+        self.model = self.model.to(self.device)
+        
         # Set conversation template
         self.conv = conv_templates["llava_v1"].copy()
         
@@ -85,8 +88,17 @@ class LLaVATool(BaseTool):
             
             prompt = prompt_template.format(context=context_str.strip(), question=question)
             
-            # Clear conversation history
-            self.conv.clear()
+            # ✅ FIX: Use reset instead of clear
+            # Reset conversation instead of clear (which doesn't exist)
+            if hasattr(self.conv, 'reset'):
+                self.conv.reset()
+            elif hasattr(self.conv, 'messages'):
+                # Manual reset
+                self.conv.messages = []
+            else:
+                # Create new conversation instance if needed
+                from llava.conversation import conv_templates
+                self.conv = conv_templates["llava_v1"].copy()
             
             # Add prompt to conversation
             self.conv.append_message(self.conv.roles[0], prompt)
@@ -128,7 +140,7 @@ class LLaVATool(BaseTool):
                 "error": str(e),
                 "traceback": traceback.format_exc()
             }
-    
+        
     def _estimate_confidence(self, answer: str) -> float:
         """Estimate confidence based on answer patterns."""
         # Simple heuristic
