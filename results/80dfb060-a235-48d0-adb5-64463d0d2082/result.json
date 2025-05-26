@@ -1,0 +1,10 @@
+{
+  "task_type": "polyp_detection",
+  "success": true,
+  "session_id": "80dfb060-a235-48d0-adb5-64463d0d2082",
+  "query": "is there any polyp?",
+  "polyps": [],
+  "polyp_count": 0,
+  "processing_time": 15.3852219581604,
+  "answer": "Không phát hiện polyp nào trong hình ảnh."
+}

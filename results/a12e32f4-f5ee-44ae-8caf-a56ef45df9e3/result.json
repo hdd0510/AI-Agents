@@ -1,0 +1,104 @@
+{
+  "task_type": "comprehensive",
+  "success": true,
+  "session_id": "a12e32f4-f5ee-44ae-8caf-a56ef45df9e3",
+  "query": "Is this have polyp, if yes, is this polyp sessile or pedunculated and how many polyps are there?",
+  "detector_result": {
+    "success": true,
+    "count": 2,
+    "objects": [
+      {
+        "position": {
+          "bbox": [
+            237.6227569580078,
+            242.9646453857422,
+            286.6803894042969,
+            292.7526550292969
+          ],
+          "center": [
+            262.15157318115234,
+            267.85865020751953
+          ]
+        },
+        "size": {
+          "width": 49.05763244628906,
+          "height": 49.78800964355469,
+          "area": 2442.481877325801
+        },
+        "confidence": 0.8865789771080017,
+        "description": "Polyp located at the middle center of the image with a good level of confidence."
+      },
+      {
+        "position": {
+          "bbox": [
+            262.4018249511719,
+            162.2720489501953,
+            306.81695556640625,
+            215.7120361328125
+          ],
+          "center": [
+            284.60939025878906,
+            188.9920425415039
+          ]
+        },
+        "size": {
+          "width": 44.415130615234375,
+          "height": 53.43998718261719,
+          "area": 2373.5440107923932
+        },
+        "confidence": 0.8435320258140564,
+        "description": "Polyp located at the middle center of the image with a moderate level of confidence."
+      }
+    ],
+    "analysis": "Hai polyp đã được phát hiện với vị trí và kích thước cụ thể. Mức độ tin cậy của phát hiện là cao với polyp đầu tiên (88.66%) và tương đối tốt với polyp thứ hai (84.35%). Cần theo dõi và xác nhận thêm trong các hình ảnh nội soi tiếp theo."
+  },
+  "polyps": [
+    {
+      "position": {
+        "bbox": [
+          237.6227569580078,
+          242.9646453857422,
+          286.6803894042969,
+          292.7526550292969
+        ],
+        "center": [
+          262.15157318115234,
+          267.85865020751953
+        ]
+      },
+      "size": {
+        "width": 49.05763244628906,
+        "height": 49.78800964355469,
+        "area": 2442.481877325801
+      },
+      "confidence": 0.8865789771080017,
+      "description": "Polyp located at the middle center of the image with a good level of confidence."
+    },
+    {
+      "position": {
+        "bbox": [
+          262.4018249511719,
+          162.2720489501953,
+          306.81695556640625,
+          215.7120361328125
+        ],
+        "center": [
+          284.60939025878906,
+          188.9920425415039
+        ]
+      },
+      "size": {
+        "width": 44.415130615234375,
+        "height": 53.43998718261719,
+        "area": 2373.5440107923932
+      },
+      "confidence": 0.8435320258140564,
+      "description": "Polyp located at the middle center of the image with a moderate level of confidence."
+    }
+  ],
+  "polyp_count": 2,
+  "answer": "```json\n{\n    \"answer\": \"Chào bạn, mình đã xem qua kết quả từ hình ảnh của bạn và thấy rằng có hai polyp được phát hiện. Trong trường hợp này, cả hai polyp có vẻ như là loại sessile, tức là chúng không có cuống rõ ràng mà bám sát vào niêm mạc ruột. Hiện tại, vị trí chính xác của các polyp này chưa được xác định rõ ràng từ hình ảnh. \\n\\nVề ý nghĩa y khoa, việc phát hiện polyp là điều cần chú ý. Polyp là những u nhỏ trong ruột và có thể lành tính, nhưng một số loại polyp có thể phát triển thành ung thư nếu không được theo dõi và xử lý kịp thời. Do đó, việc phát hiện polyp dù sao cũng là một tín hiệu để chúng ta cần thận trọng hơn về sức khỏe đường tiêu hóa.\\n\\nBước tiếp theo mình khuyên là bạn nên thực hiện thêm một cuộc nội soi để xác định rõ hơn về kích thước, vị trí và tính chất của các polyp. Tùy theo kết quả cụ thể, bác sĩ có thể đề xuất cắt bỏ polyp để ngăn ngừa biến chứng hoặc theo dõi theo định kỳ.\\n\\nMình hiểu rằng những thông tin này có thể gây lo lắng, nhưng quan trọng là bạn đã phát hiện chúng và có cơ hội để kiểm soát tình hình. Đừng ngần ngại chia sẻ thêm thông tin về tiền sử bệnh tật của bạn hoặc hỏi bất kỳ điều gì bạn còn thắc mắc, điều này sẽ giúp chúng tôi hỗ trợ bạn tốt hơn.\",\n    \"analysis\": \"Phát hiện polyp trong ruột là một phần quan trọng trong việc phòng ngừa ung thư ruột kết, đặc biệt là khi chúng có khả năng phát triển thành dạng ác tính. Polyp sessile, do không có cuống, thường khó phát hiện sớm hơn và có thể cần các biện pháp xử lý đặc biệt hơn. Việc xác định chính xác vị trí và tính chất của các polyp thông qua nội soi sẽ giúp bác sĩ đưa ra phương án điều trị hoặc theo dõi hợp lý, đảm bảo sức khỏe đường tiêu hóa của bạn được bảo vệ tốt nhất.\"\n}\n```",
+  "answer_confidence": 0.0,
+  "summary": "Phát hiện 2 polyp trong hình ảnh.\nPolyp lớn nhất nằm ở vị trí không xác định với độ tin cậy 0.89.\nTrả lời cho câu hỏi: Yes, this is a positive case showing a polyp. Based on the image, the polyp appears to be sessile, lacking a distinct stalk. There are two polyps visible in this image.",
+  "processing_time": 19.581339597702026
+}

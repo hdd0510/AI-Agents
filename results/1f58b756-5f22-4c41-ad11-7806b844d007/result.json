@@ -1,0 +1,108 @@
+{
+  "task_type": "comprehensive",
+  "success": true,
+  "session_id": "1f58b756-5f22-4c41-ad11-7806b844d007",
+  "query": "Is this have polyp, if yes, is this polyp sessile or pedunculated and how many polyps are there?",
+  "detector_result": {
+    "success": true,
+    "count": 2,
+    "objects": [
+      {
+        "position": {
+          "bbox": [
+            237.6227569580078,
+            242.9646453857422,
+            286.6803894042969,
+            292.7526550292969
+          ],
+          "center": [
+            262.15157318115234,
+            267.85865020751953
+          ],
+          "description": "middle center"
+        },
+        "size": {
+          "width": 49.05763244628906,
+          "height": 49.78800964355469,
+          "area": 2442.481877325801
+        },
+        "confidence": 0.8865789771080017,
+        "class_name": "polyp"
+      },
+      {
+        "position": {
+          "bbox": [
+            262.4018249511719,
+            162.2720489501953,
+            306.81695556640625,
+            215.7120361328125
+          ],
+          "center": [
+            284.60939025878906,
+            188.9920425415039
+          ],
+          "description": "middle center"
+        },
+        "size": {
+          "width": 44.415130615234375,
+          "height": 53.43998718261719,
+          "area": 2373.5440107923932
+        },
+        "confidence": 0.8435320258140564,
+        "class_name": "polyp"
+      }
+    ],
+    "analysis": "Hai polyp đã được phát hiện với mức độ tin cậy cao, lần lượt là 88.66% và 84.35%. Cả hai polyp đều nằm ở vị trí trung tâm của hình ảnh với kích thước và diện tích khác nhau. Cần theo dõi thêm để xác định tính chất và nguy cơ của các polyp này."
+  },
+  "polyps": [
+    {
+      "position": {
+        "bbox": [
+          237.6227569580078,
+          242.9646453857422,
+          286.6803894042969,
+          292.7526550292969
+        ],
+        "center": [
+          262.15157318115234,
+          267.85865020751953
+        ],
+        "description": "middle center"
+      },
+      "size": {
+        "width": 49.05763244628906,
+        "height": 49.78800964355469,
+        "area": 2442.481877325801
+      },
+      "confidence": 0.8865789771080017,
+      "class_name": "polyp"
+    },
+    {
+      "position": {
+        "bbox": [
+          262.4018249511719,
+          162.2720489501953,
+          306.81695556640625,
+          215.7120361328125
+        ],
+        "center": [
+          284.60939025878906,
+          188.9920425415039
+        ],
+        "description": "middle center"
+      },
+      "size": {
+        "width": 44.415130615234375,
+        "height": 53.43998718261719,
+        "area": 2373.5440107923932
+      },
+      "confidence": 0.8435320258140564,
+      "class_name": "polyp"
+    }
+  ],
+  "polyp_count": 2,
+  "answer": "```json\n{\n    \"answer\": \"Chào bạn, dựa trên kết quả phân tích hình ảnh nội soi, chúng tôi phát hiện có sự hiện diện của hai polyp trong hệ tiêu hóa của bạn. Polyp là những khối u nhỏ có thể xuất hiện trên niêm mạc ruột. Cả hai polyp này dường như thuộc loại polyp sessile, tức là chúng có chân rộng và không có cuống. Điều này có nghĩa là chúng nằm sát bề mặt niêm mạc và không nhô ra nhiều như những loại polyp có cuống. \\n\\nVề mặt y khoa, việc phát hiện này là rất quan trọng vì polyp có thể phát triển và đôi khi tiến triển thành những vấn đề nghiêm trọng hơn nếu không được theo dõi và xử lý đúng cách. Tuy nhiên, không phải tất cả các polyp đều nguy hiểm, và nhiều trường hợp có thể được xử lý dễ dàng qua các thủ thuật nhỏ. \\n\\nBước tiếp theo chúng ta cần làm là lên kế hoạch để theo dõi và có thể tiến hành thêm một số xét nghiệm hoặc thủ thuật để loại bỏ các polyp này nếu cần thiết. Điều này giúp giảm nguy cơ tiến triển thành các bệnh lý nghiêm trọng hơn. \\n\\nTôi hiểu rằng kết quả này có thể khiến bạn lo lắng, nhưng hãy yên tâm rằng chúng tôi ở đây để hỗ trợ bạn. Phát hiện sớm là một điều tốt và cho phép chúng tôi can thiệp kịp thời. \\n\\nNếu bạn có tiền sử gia đình liên quan đến các bệnh lý tiêu hóa hay bất kỳ triệu chứng nào khác gần đây, hãy chia sẻ thêm với chúng tôi. Thông tin này sẽ rất hữu ích trong việc đưa ra quyết định điều trị tối ưu cho bạn.\",\n    \"analysis\": \"Phát hiện hai polyp sessile là một kết quả đáng lưu ý trong việc chẩn đoán và theo dõi sức khỏe tiêu hóa. Polyp sessile có thể khó loại bỏ hơn so với các polyp có cuống vì chúng nằm sát bề mặt niêm mạc. Tuy nhiên, sự hiện diện của polyp không đồng nghĩa với việc có bệnh lý nghiêm trọng mà cần được đánh giá tiếp bởi bác sĩ chuyên khoa. Việc theo dõi và có thể loại bỏ chúng là một bước quan trọng trong việc phòng ngừa các bệnh lý ác tính về sau. Khả năng phát triển thành ung thư của các polyp sessile phụ thuộc vào nhiều yếu tố, bao gồm kích thước, vị trí và loại mô. Do đó, việc thăm khám và tư vấn kỹ lưỡng là cần thiết để xây dựng kế hoạch chăm sóc sức khỏe phù hợp.\"\n}\n```",
+  "answer_confidence": 0.0,
+  "summary": "Phát hiện 2 polyp trong hình ảnh.\nPolyp lớn nhất nằm ở vị trí không xác định với độ tin cậy 0.89.\nTrả lời cho câu hỏi: Yes, this is a positive case showing a polyp. The polyp appears to be sessile, based on the broad base and lack of a stalk. There are two polyps visible in this image.",
+  "processing_time": 20.807823419570923
+}

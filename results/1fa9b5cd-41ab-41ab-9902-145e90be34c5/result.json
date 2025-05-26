@@ -1,0 +1,31 @@
+{
+  "task_type": "polyp_detection",
+  "success": true,
+  "session_id": "1fa9b5cd-41ab-41ab-9902-145e90be34c5",
+  "query": "is there any polyp?",
+  "polyps": [
+    {
+      "bbox": [
+        414.6476745605469,
+        534.0584106445312,
+        631.878173828125,
+        746.7544555664062
+      ],
+      "confidence": 0.9217562675476074,
+      "class_id": 0,
+      "class_name": "polyp",
+      "width": 217.23049926757812,
+      "height": 212.696044921875,
+      "center": [
+        523.2629241943359,
+        640.4064331054688
+      ],
+      "area": 46204.06803061813,
+      "position_description": "middle center"
+    }
+  ],
+  "polyp_count": 1,
+  "answer": "Có một polyp được phát hiện, với độ tin cậy 0.92 tại vị trí trung tâm. Bạn nên theo dõi và thảo luận thêm về các bước tiếp theo với bác sĩ điều trị.",
+  "answer_confidence": 0.0,
+  "processing_time": 16.179709672927856
+}

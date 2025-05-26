@@ -44,37 +44,11 @@ Nhiệm vụ của bạn là phân tích hình ảnh để xác định vị tr�
 Bạn có thể sử dụng các công cụ sau theo thứ tự:
 1. yolo_detection: Công cụ phát hiện polyp sử dụng mô hình YOLO
    - Tham số: image_path (str), conf_thresh (float, optional)
-   - Kết quả: danh sách các polyp với thông tin bbox, confidence, position, v.v.
 
 Quy trình làm việc của bạn PHẢI theo thứ tự sau:
 1. Xác định hình ảnh cần phân tích
 2. Sử dụng công cụ yolo_detection để phát hiện polyp
-3. Lưu lại kết quả detections từ yolo_detection
-4. Phân tích kết quả phát hiện (số lượng, vị trí, kích thước, độ tin cậy)
-5. Tổng hợp kết quả và đưa ra đánh giá chuyên môn
-
-Khi trả lời, bạn PHẢI tuân theo định dạng sau:
-```
-Tool: yolo_detection
-Parameters: {"image_path": "path/to/image.jpg"}
-```
-
-Khi trả lời:
-- Mô tả chi tiết các polyp được phát hiện (vị trí, kích thước, đặc điểm)
-- Đưa ra đánh giá về mức độ tin cậy của phát hiện
-- Nếu không phát hiện polyp, hãy xác nhận điều đó và giải thích lý do có thể
-
-Bạn phải trả về JSON với định dạng:
-```json
-{
-  "detector_result": {
-    "success": true/false,
-    "count": number_of_polyps,
-    "objects": [...list of objects...],
-    "analysis": "nhận xét chuyên môn về kết quả phát hiện"
-  }
-}
-```"""
+"""
 
     def initialize(self) -> bool:
         """Khởi tạo agent và các công cụ."""
@@ -105,19 +79,38 @@ Bạn phải trả về JSON với định dạng:
         
         return f"""Hình ảnh cần phân tích: {image_path}
         
-Yêu cầu: {query if query else "Phát hiện polyp trong hình ảnh"}
+        Yêu cầu: {query if query else "Phát hiện polyp trong hình ảnh"}
 
-Thông tin y tế bổ sung:
-{context_str}
+        Thông tin y tế bổ sung:
+        {context_str}
 
-Hãy phân tích hình ảnh này để tìm polyp. Sử dụng các công cụ có sẵn để phát hiện và phân tích.
-Trả lời theo định dạng:
+        Hãy phân tích hình ảnh này để tìm polyp. Sử dụng các công cụ có sẵn để phát hiện và phân tích.
+        Trả lời theo định dạng để tool có thể sử dụng:
 
-Tool: [tên công cụ]
-Parameters: [tham số dưới dạng JSON]
+        Tool: yolo_detection (tên công cụ)
+        Parameters: ({{"image_path": "path/to/image.jpg", "conf_thresh": 0.5}}) (tham số dưới dạng JSON)
 
-Sau khi sử dụng công cụ, hãy phân tích kết quả và đưa ra nhận xét chuyên môn.
-"""
+        Sau khi sử dụng công cụ, hãy phân tích kết quả và đưa ra nhận xét chuyên môn.
+        """
+    def _format_synthesis_input(self) -> str:
+        return """
+        Dựa trên kết quả từ tools, bạn phải xác định:
+        - Mô tả chi tiết các polyp được phát hiện (vị trí, kích thước, đặc điểm)
+        - Đưa ra đánh giá về mức độ tin cậy của phát hiện
+        - Nếu không phát hiện polyp, hãy xác nhận điều đó và giải thích lý do có thể
+
+        Bạn phải trả về JSON với định dạng:
+        ```json
+        {
+        "detector_result": {
+            "success": true/false,
+            "count": number_of_polyps,
+            "objects": [...list of objects...],
+            "analysis": "nhận xét chuyên môn về kết quả phát hiện"
+        }
+        }
+        ```
+        """
     
     def _extract_agent_result(self, synthesis: str) -> Dict[str, Any]:
         """Extract agent result from LLM synthesis."""

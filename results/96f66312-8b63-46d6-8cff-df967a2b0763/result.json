@@ -1,0 +1,11 @@
+{
+  "task_type": "polyp_detection",
+  "success": true,
+  "session_id": "96f66312-8b63-46d6-8cff-df967a2b0763",
+  "query": "is there any polyp?",
+  "polyps": [],
+  "polyp_count": 0,
+  "answer": "Kính chào bạn,\n\nTôi rất vui mừng thông báo rằng kết quả từ hình ảnh nội soi cho thấy không phát hiện polyp nào. Đây là một tin rất tốt, cho thấy rằng không có dấu hiệu bất thường nào trong hệ tiêu hóa của bạn tại thời điểm này. Việc không có polyp giúp giảm nguy cơ phát triển thành các vấn đề nghiêm trọng hơn trong tương lai.\n\nMặc dù kết quả hiện tại là tích cực, tôi khuyên bạn nên chú ý đến chế độ ăn uống và lối sống của mình để duy trì sức khỏe đường tiêu hóa. Hãy cố gắng ăn nhiều trái cây, rau xanh, và thực phẩm giàu chất xơ, đồng thời thường xuyên kiểm tra sức khỏe định kỳ để phát hiện sớm bất kỳ vấn đề nào có thể xảy ra. \n\nNgoài ra, nếu bạn có bất kỳ triệu chứng hoặc lo lắng nào khác, xin vui lòng chia sẻ với tôi. Tôi luôn sẵn sàng lắng nghe và hỗ trợ bạn trong việc chăm sóc sức khỏe tốt nhất.",
+  "answer_confidence": 0.0,
+  "processing_time": 38.14842081069946
+}

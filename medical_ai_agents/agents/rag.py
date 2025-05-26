@@ -481,6 +481,9 @@ Parameters: {{"query": "câu hỏi", "mode": "mode_phù_hợp", "medical_context
 
 Bước 3: Phân tích kết quả và đưa ra câu trả lời cuối cùng."""
     
+    def _format_synthesis_input(self) -> str:
+        pass
+
     def _extract_agent_result(self, synthesis: str) -> Dict[str, Any]:
         """Extract agent result from LLM synthesis."""
         try:
@@ -522,3 +525,4 @@ Bước 3: Phân tích kết quả và đưa ra câu trả lời cuối cùng.""
             self.initialize()
         
         return self.lightrag_tool.insert_documents(documents)
+    

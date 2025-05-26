@@ -1,0 +1,10 @@
+{
+  "task_type": "polyp_detection",
+  "success": true,
+  "session_id": "f42f0faf-24e5-4d08-adf7-b593d649212e",
+  "query": "Is there any polyp?",
+  "polyps": [],
+  "polyp_count": 0,
+  "processing_time": 16.286861419677734,
+  "answer": "Kết quả kiểm tra cho thấy không có polyp nào được phát hiện, bạn hoàn toàn yên tâm nhé. Nếu có bất kỳ triệu chứng nào khác, hãy cho tôi biết để được tư vấn thêm."
+}

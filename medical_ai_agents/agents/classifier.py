@@ -127,6 +127,9 @@ Parameters: [tham số dưới dạng JSON]
 Sau khi sử dụng công cụ, hãy phân tích kết quả và đưa ra nhận xét chuyên môn.
 """
     
+    def _format_synthesis_input(self) -> str:
+        pass
+
     def _extract_agent_result(self, synthesis: str) -> Dict[str, Any]:
         """Extract agent result from LLM synthesis."""
         try:

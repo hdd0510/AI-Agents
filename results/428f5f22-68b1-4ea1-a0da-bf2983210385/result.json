@@ -1,0 +1,12 @@
+{
+  "task_type": "comprehensive",
+  "success": true,
+  "session_id": "428f5f22-68b1-4ea1-a0da-bf2983210385",
+  "query": "Is this have polyp, if yes, is this polyp sessile or pedunculated and how many polyps are there?",
+  "polyps": [],
+  "polyp_count": 0,
+  "answer": "Xin chào, tôi rất vui được thông báo rằng hình ảnh nội soi của bạn cho thấy không có polyp nào được phát hiện. Đây là một kết quả rất tích cực, vì việc không tìm thấy polyp có ý nghĩa rằng nguy cơ phát triển các vấn đề liên quan đến polyp, chẳng hạn như ung thư đại trực tràng, hiện tại là rất thấp. Điều này giúp chúng ta có thể yên tâm hơn và tập trung vào các biện pháp phòng ngừa cũng như theo dõi sức khỏe định kỳ.\n\nViệc không phát hiện polyp cũng cho thấy rằng bạn đang chăm sóc bản thân rất tốt. Tuy nhiên, tôi vẫn khuyến khích bạn duy trì lối sống lành mạnh, bao gồm chế độ ăn uống cân bằng, hoạt động thể chất đều đặn và tránh các thói quen không tốt như hút thuốc lá hoặc tiêu thụ rượu bia quá mức. Đặc biệt, việc theo dõi sức khỏe định kỳ với các cuộc kiểm tra nội soi có thể giúp phát hiện sớm những thay đổi bất thường nếu có.\n\nNếu bạn có bất kỳ triệu chứng nào khác hoặc có những lo lắng cụ thể về sức khỏe của mình, đừng ngần ngại chia sẻ để tôi có thể tư vấn và hỗ trợ bạn một cách tốt nhất. Sự chăm sóc và quan tâm đến sức khỏe của bạn là ưu tiên hàng đầu của chúng tôi.",
+  "answer_confidence": 0.0,
+  "summary": "Không phát hiện polyp nào trong hình ảnh.\nTrả lời cho câu hỏi: No polyp is detected in this image.",
+  "processing_time": 12.986436367034912
+}

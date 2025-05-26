@@ -1,0 +1,18 @@
+{
+  "task_type": "comprehensive",
+  "success": true,
+  "session_id": "602bec45-1224-497f-9403-a64f7ce29a98",
+  "query": "Is this have polyp, if yes, is this polyp sessile or pedunculated and how many polyps are there?",
+  "detector_result": {
+    "success": true,
+    "count": 0,
+    "objects": [],
+    "analysis": "Không phát hiện polyp nào trong hình ảnh."
+  },
+  "polyps": [],
+  "polyp_count": 0,
+  "answer": "Chào bạn, tôi rất vui được thông báo rằng kết quả hình ảnh nội soi của bạn cho thấy không có polyp nào được phát hiện. Điều này là tin tốt, vì không có polyp nghĩa là nguy cơ phát triển các vấn đề về đường tiêu hóa của bạn hiện tại là rất thấp.\n\nKhông phát hiện polyp có nghĩa là niêm mạc ruột của bạn đang trong tình trạng tốt. Tuy nhiên, để duy trì sức khỏe đường tiêu hóa, tôi khuyến nghị bạn nên tiếp tục thực hiện các biện pháp phòng ngừa như duy trì chế độ ăn uống cân bằng, giàu chất xơ và thường xuyên vận động. Việc theo dõi định kỳ cũng rất quan trọng, vì vậy hãy chắc chắn tham khảo ý kiến bác sĩ về lịch trình kiểm tra phù hợp.\n\nNếu bạn có bất kỳ triệu chứng nào như đau bụng, thay đổi thói quen đi tiêu, hoặc bất kỳ mối lo ngại nào khác, hãy đừng ngần ngại chia sẻ. Chúng tôi luôn sẵn lòng lắng nghe và hỗ trợ bạn. Chúc bạn luôn khỏe mạnh!",
+  "answer_confidence": 0.0,
+  "summary": "Không phát hiện polyp nào trong hình ảnh.\nTrả lời cho câu hỏi: No polyp is detected in this image.",
+  "processing_time": 19.726356267929077
+}

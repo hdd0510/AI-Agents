@@ -2,15 +2,17 @@
 # -*- coding: utf-8 -*-
 
 """
-Medical AI Tools - LLaVA Tool
+Medical AI Tools - LLaVA Tool (Fixed with CLI Logic)
 --------------------------
-Tool sử dụng LLaVA cho VQA trên hình ảnh y tế.
+Tool sử dụng LLaVA cho VQA trên hình ảnh y tế với logic y hệt CLI.
 """
 
 import os
 import torch
 from typing import Dict, Any, Optional
 from PIL import Image
+import requests
+from io import BytesIO
 
 from medical_ai_agents.tools.base_tools import BaseTool
 
@@ -25,112 +27,171 @@ class LLaVATool(BaseTool):
         
         self.model_path = model_path
         self.device = device
+        self.model_base = None
+        self.load_8bit = False
+        self.load_4bit = False
+        self.temperature = 0.1
+        self.max_new_tokens = 1024
+        
+        # Model components
         self.tokenizer = None
         self.model = None
         self.image_processor = None
         self.context_len = None
-        self.conv = None
+        self.conv_mode = None
+        
         self._initialize()
     
     def _initialize(self) -> bool:
-        """Load LLaVA model."""
-        # Import LLaVA components
-        from llava.model.builder import load_pretrained_model
-        from llava.mm_utils import get_model_name_from_path
-        from llava.conversation import conv_templates
-        
-        # Get model name
-        model_name = os.path.basename(self.model_path.rstrip('/'))
-        
-        # Load model
-        self.logger.info(f"Loading LLaVA model from {self.model_path}")
-        model_base = None
-        self.tokenizer, self.model, self.image_processor, self.context_len = \
-            load_pretrained_model(self.model_path, model_base, model_name, device=self.device)
-        
-        # Ensure model is on the correct device
-        self.model = self.model.to(self.device)
-        
-        # Set conversation template
-        self.conv = conv_templates["llava_v1"].copy()
-        
-        return True
-        
+        """Load LLaVA model using exact CLI logic."""
+        try:
+            from llava.model.builder import load_pretrained_model
+            from llava.utils import disable_torch_init
+            from llava.mm_utils import get_model_name_from_path
+            
+            # Disable torch init như CLI
+            disable_torch_init()
+            
+            # Get model name
+            model_name = get_model_name_from_path(self.model_path)
+            
+            self.logger.info(f"Loading LLaVA model: {model_name} from {self.model_path}")
+            
+            # Load model với exact same parameters như CLI
+            self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(
+                self.model_path, 
+                self.model_base, 
+                model_name, 
+                self.load_8bit, 
+                self.load_4bit, 
+                device=self.device
+            )
+            
+            # Determine conversation mode như CLI
+            if "llama-2" in model_name.lower():
+                self.conv_mode = "llava_llama_2"
+            elif "mistral" in model_name.lower():
+                self.conv_mode = "mistral_instruct"
+            elif "v1.6-34b" in model_name.lower():
+                self.conv_mode = "chatml_direct"
+            elif "v1" in model_name.lower():
+                self.conv_mode = "llava_v1"
+            elif "mpt" in model_name.lower():
+                self.conv_mode = "mpt"
+            else:
+                self.conv_mode = "llava_v0"
+            
+            self.logger.info(f"Using conversation mode: {self.conv_mode}")
+            
+            # After loading the model and before using it, ensure mm_use_im_start_end is True
+            if hasattr(self.model, 'config') and hasattr(self.model.config, 'mm_use_im_start_end'):
+                if not self.model.config.mm_use_im_start_end:
+                    self.model.config.mm_use_im_start_end = True
+            
+            return True
+            
+        except Exception as e:
+            import traceback
+            self.logger.error(f"Failed to initialize LLaVA: {str(e)}")
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            return False
+    
+    def _load_image(self, image_file: str) -> Image.Image:
+        """Load image exactly like CLI version."""
+        if image_file.startswith('http://') or image_file.startswith('https://'):
+            response = requests.get(image_file)
+            image = Image.open(BytesIO(response.content)).convert('RGB')
+        else:
+            image = Image.open(image_file).convert('RGB')
+        return image
 
     def _run(self, image_path: str, question: str, medical_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Run LLaVA on the image with the given question."""
+        """Run LLaVA on the image with the given question using exact CLI logic."""
         if self.model is None:
             return {"success": False, "error": "LLaVA model not initialized"}
         
         try:
-            # Load image
-            image = Image.open(image_path).convert("RGB")
+            from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
+            from llava.conversation import conv_templates, SeparatorStyle
+            from llava.mm_utils import process_images, tokenizer_image_token
             
-            # Preprocess image
-            image_tensor = self.image_processor.preprocess(image, return_tensors="pt")["pixel_values"]
-            image_tensor = image_tensor.to(self.device)
+            # Load image using CLI method
+            image = self._load_image(image_path)
+            image_size = image.size
             
-            # Format context
+            # Process images exactly like CLI - Similar operation in model_worker.py
+            image_tensor = process_images([image], self.image_processor, self.model.config)
+            if type(image_tensor) is list:
+                image_tensor = [img.to(self.model.device, dtype=torch.float16) for img in image_tensor]
+            else:
+                image_tensor = image_tensor.to(self.model.device, dtype=torch.float16)
+            
+            # Setup conversation template
+            conv = conv_templates[self.conv_mode].copy()
+            if "mpt" in self.conv_mode.lower():
+                roles = ('user', 'assistant')
+            else:
+                roles = conv.roles
+            
+            # Build prompt with medical context
             context_str = ""
             if medical_context:
                 context_str = "Medical context:\n"
                 for key, value in medical_context.items():
                     context_str += f"- {key}: {value}\n"
+                context_str += "\n"
             
-            # Create prompt
-            prompt_template = (
-                "I am a medical AI assistant specialized in analyzing endoscopy images. "
-                "I'll answer your question about this medical image based on what I can observe.\n\n"
-                "{context}\n\n"
-                "Question: {question}\n\n"
-                "Answer:"
-            )
+            # FIX: Sử dụng question parameter
+            inp = context_str + question  # ← Thêm dòng này
             
-            prompt = prompt_template.format(context=context_str.strip(), question=question)
-            
-            # ✅ FIX: Use reset instead of clear
-            # Reset conversation instead of clear (which doesn't exist)
-            if hasattr(self.conv, 'reset'):
-                self.conv.reset()
-            elif hasattr(self.conv, 'messages'):
-                # Manual reset
-                self.conv.messages = []
+            # Add image token exactly like CLI
+            if self.model.config.mm_use_im_start_end:
+                inp = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + '\n' + inp
             else:
-                # Create new conversation instance if needed
-                from llava.conversation import conv_templates
-                self.conv = conv_templates["llava_v1"].copy()
+                inp = DEFAULT_IMAGE_TOKEN + '\n' + inp
+            # Build conversation
+            conv.append_message(conv.roles[0], inp)
+            conv.append_message(conv.roles[1], None)
+            prompt = conv.get_prompt()
             
-            # Add prompt to conversation
-            self.conv.append_message(self.conv.roles[0], prompt)
-            self.conv.append_message(self.conv.roles[1], None)
+            # Tokenize using CLI method
+            input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(self.model.device)
             
-            # Get prompt
-            prompt = self.conv.get_prompt()
-            
-            # Tokenize
-            input_ids = self.tokenizer(prompt, return_tensors="pt").input_ids.to(self.device)
-            
-            # Generate
+            # Generate with exact CLI parameters
             with torch.inference_mode():
                 output_ids = self.model.generate(
                     input_ids,
                     images=image_tensor,
-                    do_sample=True,
-                    temperature=0.2,
-                    max_new_tokens=512
+                    image_sizes=[image_size],
+                    do_sample=True if self.temperature > 0 else False,
+                    temperature=self.temperature,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    max_new_tokens=self.max_new_tokens,
+                    use_cache=True
                 )
             
-            # Decode output
-            outputs = self.tokenizer.decode(output_ids[0, input_ids.shape[1]:], skip_special_tokens=True)
-            answer = outputs.strip()
+            # Decode output exactly like CLI
+            outputs = self.tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
             
-            # Estimate confidence based on answer patterns
-            confidence = self._estimate_confidence(answer)
+            # Extract only the response part (remove the original prompt)
+            # Find where the assistant response starts
+            if conv.roles[1] + ":" in outputs:
+                answer = outputs.split(conv.roles[1] + ":")[-1].strip()
+            else:
+                # Fallback: try to extract after the last role marker
+                answer = outputs
+                for role in conv.roles:
+                    if role in answer:
+                        parts = answer.split(role)
+                        if len(parts) > 1:
+                            answer = parts[-1].strip()
+            
+            # Clean up common artifacts
+            answer = answer.replace("</s>", "").strip()
             
             return {
                 "success": True,
-                "answer": answer,
-                "confidence": confidence
+                "answer": answer
             }
             
         except Exception as e:
@@ -140,39 +201,13 @@ class LLaVATool(BaseTool):
                 "error": str(e),
                 "traceback": traceback.format_exc()
             }
-        
-    def _estimate_confidence(self, answer: str) -> float:
-        """Estimate confidence based on answer patterns."""
-        # Simple heuristic
-        low_confidence_phrases = [
-            "i'm not sure", "i am not sure", "unclear", "cannot determine",
-            "difficult to say", "hard to tell", "cannot see", "not visible",
-            "may be", "might be", "possibly", "probably", "uncertain"
-        ]
-        
-        answer_lower = answer.lower()
-        confidence = 1.0
-        
-        # Reduce confidence for uncertainty phrases
-        for phrase in low_confidence_phrases:
-            if phrase in answer_lower:
-                confidence -= 0.1
-                if confidence < 0.3:
-                    confidence = 0.3
-                    break
-        
-        # Reduce confidence for very short answers
-        if len(answer.split()) < 10:
-            confidence -= 0.1
-        
-        return max(0.0, min(1.0, confidence))
     
     def get_parameters_schema(self) -> Dict[str, Any]:
         """Return JSON schema for the tool parameters."""
         return {
             "image_path": {
                 "type": "string",
-                "description": "Path to the image file to analyze"
+                "description": "Path to the image file to analyze (local path or URL)"
             },
             "question": {
                 "type": "string",
@@ -180,7 +215,7 @@ class LLaVATool(BaseTool):
             },
             "medical_context": {
                 "type": "object",
-                "description": "Optional medical context information",
+                "description": "Optional medical context information from other agents",
                 "required": False
             }
         }

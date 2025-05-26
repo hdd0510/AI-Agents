@@ -42,37 +42,13 @@ class VQAAgent(BaseAgent):
     
     def _get_system_prompt(self) -> str:
         """Get the system prompt that defines this agent's role."""
-        return """Bạn là một AI chuyên gia y tế chuyên trả lời câu hỏi dựa trên hình ảnh nội soi tiêu hóa.
-Nhiệm vụ của bạn là phân tích câu hỏi y tế và sử dụng công cụ thị giác để trả lời chính xác.
-
-Bạn có thể sử dụng công cụ sau:
-1. llava_vqa: Công cụ trả lời câu hỏi dựa trên hình ảnh sử dụng mô hình LLaVA
+        prompt = """
+Bạn là một AI chuyên gia y tế, nhiệm vụ của bạn là xác nhận lại kết quả trả lời từ công cụ llava_vqa dựa trên hình ảnh nội soi tiêu hóa và câu hỏi y tế.
+Bạn chỉ sử dụng công cụ sau:
+llava_vqa: Công cụ trả lời câu hỏi dựa trên hình ảnh sử dụng mô hình LLaVA
    - Tham số: image_path (str), question (str), medical_context (Dict, optional)
-   - Kết quả: câu trả lời và độ tin cậy
-
-Quy trình làm việc của bạn:
-1. Phân tích câu hỏi của người dùng
-2. Chuẩn bị câu hỏi chi tiết cho mô hình LLaVA
-3. Sử dụng công cụ llava_vqa để trả lời câu hỏi
-4. Phân tích câu trả lời và độ tin cậy
-5. Nâng cao chất lượng câu trả lời với kiến thức y tế chuyên môn
-
-QUAN TRỌNG: Bạn PHẢI trả lời theo định dạng sau:
-
-Tool: llava_vqa
-Parameters: {"image_path": "path/to/image", "question": "câu hỏi", "medical_context": {}}
-
-Sau đó phân tích kết quả và trả về JSON cuối cùng theo format:
-```json
-{
-  "vqa_result": {
-    "success": true/false,
-    "answer": "câu trả lời chi tiết",
-    "confidence": confidence_value,
-    "analysis": "phân tích chuyên môn về độ tin cậy và chất lượng câu trả lời"
-  }
-}
-```"""
+"""
+        return prompt
 
     def initialize(self) -> bool:
         """Khởi tạo agent và các công cụ."""
@@ -101,7 +77,7 @@ Sau đó phân tích kết quả và trả về JSON cuối cùng theo format:
             
             if objects:
                 polyp_descriptions = []
-                for i, obj in enumerate(objects[:3]):  # Top 3 objects
+                for i, obj in enumerate(objects):
                     desc = f"Polyp {i+1}: {obj.get('confidence', 0):.2f} confidence, "
                     desc += f"location: {obj.get('position_description', 'unknown')}"
                     polyp_descriptions.append(desc)
@@ -136,21 +112,36 @@ Sau đó phân tích kết quả và trả về JSON cuối cùng theo format:
         context_str = "\n".join([f"- {k}: {v}" for k, v in context.items()]) if context else "None"
         
         return f"""Hình ảnh cần phân tích: {image_path}
-        
-Câu hỏi: {query if query else "Mô tả những gì bạn thấy trong hình ảnh này"}
+                
+        Câu hỏi: {query if query else "Mô tả những gì bạn thấy trong hình ảnh này"}
 
-Thông tin y tế bổ sung:
-{context_str}
+        Thông tin y tế bổ sung:
+        {context_str}
 
-Hãy sử dụng công cụ llava_vqa để trả lời câu hỏi này dựa trên hình ảnh.
-Cần đảm bảo câu trả lời có tính chuyên môn cao và chính xác về mặt y tế.
+        Hãy sử dụng công cụ llava_vqa để trả lời câu hỏi này dựa trên hình ảnh.
+        Trả lời theo định dạng sau:
 
-Trả lời theo định dạng sau:
-
-Tool: llava_vqa
-Parameters: {{"image_path": "{image_path}", "question": "{query if query else 'Mô tả những gì bạn thấy trong hình ảnh này'}", "medical_context": {json.dumps(context)}}}
-
-Sau khi sử dụng công cụ, hãy phân tích kết quả và đưa ra câu trả lời cuối cùng với độ tin cậy."""
+        Tool: llava_vqa
+        Parameters: {{"image_path": "{image_path}", "question": "{query if query else 'Mô tả những gì bạn thấy trong hình ảnh này'}", "medical_context": {json.dumps(context)}}}
+        """
+    
+    def _format_synthesis_input(self) -> str:
+        return """
+        Dựa trên kết quả từ tools, bạn phải xác định:
+        - Mô tả lại kết quả từ vqa với lối hành văn rõ ràng, dễ hiểu với người dùng
+        - Không bịa đặt câu trả lời mà cần bám sát với nội dung của câu trả lời từ tools
+        - Nếu không phát hiện polyp, hãy xác nhận điều đó và giải thích lý do có thể
+        Trả lời theo định dạng sau:
+        ```json
+        {
+            "vqa_result": {
+                "success": true/false,
+                "answer": "câu trả lời chi tiết từ tools llava_vqa",
+                "analysis": "Mô tả lại kết quả từ llava vqa với lối hành văn trôi trảy mạch lạc"
+            }
+        }
+        ```
+        """
     
     def _parse_tool_calls(self, plan: str) -> List[Dict[str, Any]]:
         """Enhanced parsing for VQA agent - handle both formats."""
@@ -255,107 +246,84 @@ Sau khi sử dụng công cụ, hãy phân tích kết quả và đưa ra câu t
             # If no JSON found, look for key information in text
             self.logger.warning("[VQA] No JSON found in synthesis, parsing text")
             
-            # Try to extract answer and confidence from text
+            # Try to extract answer from text
             answer = ""
-            confidence = 0.7
-            
             # Look for answer patterns
             answer_patterns = [
-                r'answer["\s]*:["\s]*([^"]+)',
+                r'answer["\s]*:["\s]*([^"\n]+)',
                 r'Answer[:\s]+([^\n]+)',
                 r'câu trả lời[:\s]+([^\n]+)',
             ]
-            
             for pattern in answer_patterns:
                 matches = re.findall(pattern, synthesis, re.IGNORECASE)
                 if matches:
                     answer = matches[0].strip()
                     break
-            
-            # Look for confidence patterns
-            conf_patterns = [
-                r'confidence["\s]*:["\s]*([0-9.]+)',
-                r'độ tin cậy[:\s]+([0-9.]+)',
-            ]
-            
-            for pattern in conf_patterns:
-                matches = re.findall(pattern, synthesis, re.IGNORECASE)
-                if matches:
-                    try:
-                        confidence = float(matches[0])
-                        break
-                    except:
-                        pass
-            
             # If still no answer found, use the whole synthesis as answer
             if not answer:
                 answer = synthesis
-            
             # Fallback: Create result from synthesis text
             return {
                 "vqa_result": {
                     "success": True,
                     "answer": answer,
-                    "confidence": confidence,
                     "analysis": "Generated from LLM synthesis parsing"
                 }
             }
-            
         except Exception as e:
             self.logger.error(f"[VQA] Failed to extract agent result: {str(e)}")
             return {
                 "vqa_result": {
                     "success": False,
                     "error": str(e),
-                    "answer": synthesis,
-                    "confidence": 0.5
+                    "answer": synthesis
                 }
             }
 
-    def _process_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Process state using LLM controller and tools."""
-        # Extract relevant information from state
-        task_input = self._extract_task_input(state)
-        self.logger.info(f"[VQA] Task input: {json.dumps(task_input, indent=2)}")
+    # def _process_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    #     """Process state using LLM controller and tools."""
+    #     # Extract relevant information from state
+    #     task_input = self._extract_task_input(state)
+    #     self.logger.info(f"[VQA] Task input: {json.dumps(task_input, indent=2)}")
         
-        # Let LLM decide which tools to use and how
-        messages = [
-            SystemMessage(content=self.system_prompt),
-            HumanMessage(content=self._format_task_input(task_input))
-        ]
+    #     # Let LLM decide which tools to use and how
+    #     messages = [
+    #         SystemMessage(content=self.system_prompt),
+    #         HumanMessage(content=self._format_task_input(task_input))
+    #     ]
         
-        # Get response from LLM
-        response = self.llm.invoke(messages)
-        plan = response.content
-        self.logger.info(f"[VQA] LLM plan: {plan}")
+    #     # Get response from LLM
+    #     response = self.llm.invoke(messages)
+    #     plan = response.content
+    #     self.logger.info(f"[VQA] LLM plan: {plan}")
         
-        # Parse the plan and execute tools
-        tool_calls = self._parse_tool_calls(plan)
-        self.logger.info(f"[VQA] Parsed tool calls: {json.dumps(tool_calls, indent=2)}")
+    #     # Parse the plan and execute tools
+    #     tool_calls = self._parse_tool_calls(plan)
+    #     self.logger.info(f"[VQA] Parsed tool calls: {json.dumps(tool_calls, indent=2)}")
         
-        results = {}
-        tool_outputs = {}
+    #     results = {}
+    #     tool_outputs = {}
         
-        for tool_call in tool_calls:
-            tool_name = tool_call.get("tool_name")
-            params = tool_call.get("params", {})
+    #     for tool_call in tool_calls:
+    #         tool_name = tool_call.get("tool_name")
+    #         params = tool_call.get("params", {})
             
-            if tool_name:
-                self.logger.info(f"[VQA] Processing tool call: {tool_name}")
-                self.logger.info(f"[VQA] Initial parameters: {json.dumps(params, indent=2)}")
+    #         if tool_name:
+    #             self.logger.info(f"[VQA] Processing tool call: {tool_name}")
+    #             self.logger.info(f"[VQA] Initial parameters: {json.dumps(params, indent=2)}")
                 
-                # Execute the tool
-                tool_result = self.execute_tool(tool_name, **params)
-                results[tool_name] = tool_result
-                tool_outputs[tool_name] = tool_result
-                self.logger.info(f"[VQA] Tool {tool_name} completed with result: {json.dumps(tool_result, indent=2)}")
+    #             # Execute the tool
+    #             tool_result = self.execute_tool(tool_name, **params)
+    #             results[tool_name] = tool_result
+    #             tool_outputs[tool_name] = tool_result
+    #             self.logger.info(f"[VQA] Tool {tool_name} completed with result: {json.dumps(tool_result, indent=2)}")
         
-        # Let LLM synthesize final result
-        messages.append(HumanMessage(content=f"Tool results: {json.dumps(results, indent=2)}\n\nPlease synthesize a final result in the required JSON format."))
-        synthesis_response = self.llm.invoke(messages)
-        self.logger.info(f"[VQA] Synthesis response: {synthesis_response.content}")
+    #     # Let LLM synthesize final result
+    #     messages.append(HumanMessage(content=f"Tool results: {json.dumps(results, indent=2)}\n\nPlease synthesize a final result in the required JSON format."))
+    #     synthesis_response = self.llm.invoke(messages)
+    #     self.logger.info(f"[VQA] Synthesis response: {synthesis_response.content}")
         
-        # Return agent result
-        agent_result = self._extract_agent_result(synthesis_response.content)
-        self.logger.info(f"[VQA] Final agent result: {json.dumps(agent_result, indent=2)}")
-        return {**state, **agent_result}
+    #     # Return agent result
+    #     agent_result = self._extract_agent_result(synthesis_response.content)
+    #     self.logger.info(f"[VQA] Final agent result: {json.dumps(agent_result, indent=2)}")
+    #     return {**state, **agent_result}

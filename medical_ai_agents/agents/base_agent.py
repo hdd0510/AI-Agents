@@ -30,7 +30,7 @@ class BaseAgent(ABC):
         self.initialized = False
         
         # Initialize LLM controller
-        self.llm = ChatOpenAI(model=llm_model, temperature=0.1)
+        self.llm = ChatOpenAI(model=llm_model, temperature=0.5)
         self.tools = self._register_tools()
         self.system_prompt = self._get_system_prompt()
     
@@ -147,8 +147,11 @@ class BaseAgent(ABC):
                 self.logger.info(f"Tool {tool_name} completed with result: {json.dumps(tool_result, indent=2)}")
         
         # Let LLM synthesize final result
-        messages.append(HumanMessage(content=f"Tool results: {json.dumps(results, indent=2)}\n\nPlease synthesize a final result."))
-        synthesis_response = self.llm.invoke(messages)
+        systhesis_message = [
+            SystemMessage(content=self.system_prompt),
+            HumanMessage(content=f"Tool results: {json.dumps(results, indent=2)}\n\n {self._format_synthesis_input()}")
+        ]
+        synthesis_response = self.llm.invoke(systhesis_message)
         
         # Return agent result
         agent_result = self._extract_agent_result(synthesis_response.content)
@@ -158,7 +161,10 @@ class BaseAgent(ABC):
     def _extract_task_input(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Extract task-specific input from state."""
         pass
-    
+    @abstractmethod
+    def _format_synthesis_input(self) -> str:
+        pass
+
     @abstractmethod
     def _format_task_input(self, task_input: Dict[str, Any]) -> str:
         """Format task input for LLM prompt."""

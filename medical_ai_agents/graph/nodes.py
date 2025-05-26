@@ -242,12 +242,37 @@ def _needs_reflection(state: SystemState) -> bool:
 
 # Result Synthesizer Node
 def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
-    """Synthesizes the final result from all agent outputs."""
+    """Synthesizes the final result from all agent outputs, including merging results from sub-agents if present."""
     logger = logging.getLogger("graph.nodes.synthesizer")
-    
     task_type = state.get("task_type", TaskType.COMPREHENSIVE)
     logger.info(f"Synthesizing results for task type: {task_type}")
-    
+
+    # --- NEW: Merge results from sub-agents if present ---
+    merged = {}
+    if "results" in state and isinstance(state["results"], dict):
+        # results is a dict of {agent_name: agent_result_dict}
+        for agent_name, agent_result in state["results"].items():
+            for key in [
+                "detector_result", "modality_result", "region_result", "vqa_result", "rag_result", "reflection_result"
+            ]:
+                if key in agent_result and agent_result[key]:
+                    # Nếu là detector_result thì gộp objects
+                    if key == "detector_result":
+                        if "detector_result" not in merged:
+                            merged["detector_result"] = {"objects": []}
+                        # Gộp objects
+                        objects = agent_result[key].get("objects", [])
+                        merged["detector_result"]["objects"] += objects
+                        # Gộp các trường khác nếu có
+                        for k, v in agent_result[key].items():
+                            if k != "objects":
+                                merged["detector_result"][k] = v
+                    else:
+                        merged[key] = agent_result[key]
+    # Merge lại vào state để ưu tiên các trường đã tổng hợp
+    state = {**state, **merged}
+    # --- END NEW ---
+
     # Start with a basic result structure
     final_result = {
         "task_type": task_type,
@@ -256,20 +281,20 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
         "query": state.get("query", "")
     }
     
-    # ✅ FIX: Include detector results correctly - check both success and objects
+    # ✅ FIX: Include detector results correctly - giữ nguyên toàn bộ dict
     detector_result = state.get("detector_result", {})
     logger.info(f"Detector result in synthesizer: {detector_result}")
-    
+
+    # Gán nguyên detector_result vào final_result nếu có
     if detector_result:
-        # Even if success=False, still check for objects
+        final_result["detector_result"] = detector_result
+        # Vẫn có thể lấy objects và polyp_count cho các trường hợp tổng hợp khác
         objects = detector_result.get("objects", [])
-        
-        # Use objects from detector regardless of success flag
         final_result["polyps"] = objects
         final_result["polyp_count"] = len(objects)
-        
         logger.info(f"Found {len(objects)} polyps from detector")
     else:
+        final_result["detector_result"] = {}
         final_result["polyps"] = []
         final_result["polyp_count"] = 0
         logger.info("No detector result found")
@@ -325,31 +350,130 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
                 conf = polyp.get('confidence', 0)
                 pos = polyp.get('position_description', 'unknown position')
                 polyp_details.append(f"Polyp {i+1}: {conf:.2f} confidence at {pos}")
-            
-            prompt = f"""
-            Bạn là bác sĩ chuyên khoa tiêu hóa. Trả lời câu hỏi của bệnh nhân:
-            
-            Câu hỏi: {query}
-            
-            Kết quả phát hiện: Phát hiện {polyp_count} polyp
-            Chi tiết: {'; '.join(polyp_details)}
-            
-            Trả lời ngắn gọn, chuyên nghiệp (1-2 câu):
-            """
-        else:
-            # No polyps
-            prompt = f"""
-            Bạn là bác sĩ chuyên khoa tiêu hóa. Trả lời câu hỏi của bệnh nhân:
-            
-            Câu hỏi: {query}
-            
-            Kết quả phát hiện: Không phát hiện polyp nào
-            
-            Trả lời ngắn gọn, trấn an bệnh nhân (1-2 câu):
-            """
+
+            synthesis_prompt = """
+Bạn là bác sĩ chuyên khoa tiêu hóa có nhiều năm kinh nghiệm. Hãy trả lời bệnh nhân với giọng điệu chuyên nghiệp, tận tâm và đầy thông cảm.
+- Trình bày kết quả một cách tự nhiên, thân thiện, dễ hiểu, tránh khô khan.
+- Không sử dụng các con số xác suất cứng nhắc (ví dụ: thay vì 'độ tin cậy 89%' hãy nói 'khả năng rất cao', 'có vẻ như', 'nhiều khả năng', 'có thể quan sát thấy', v.v.).
+- Nhấn mạnh ý nghĩa lâm sàng của phát hiện, giải thích rõ ràng cho bệnh nhân.
+- Nếu có điểm chưa chắc chắn, hãy diễn đạt một cách mềm mại, không gây lo lắng không cần thiết.
+- Đưa ra lời khuyên hoặc hỏi thêm về quy trình nếu thực sự cần thiết.
+"""
+            # Chuẩn bị thông tin từ tất cả các agent
+            vqa_info = ""
+            if "vqa_result" in state and state["vqa_result"].get("success", False):
+                vqa_result = state["vqa_result"]
+                vqa_info = f"""
+Thông tin từ phân tích hình ảnh (VQA):
+- Câu trả lời: {vqa_result.get('answer', 'Không có thông tin')}
+- Phân tích: {vqa_result.get('analysis', 'Không có phân tích chi tiết')}
+"""
+
+            modality_info = ""
+            if "modality_result" in state and state["modality_result"].get("success", False):
+                modality_result = state["modality_result"]
+                modality_info = f"""
+Thông tin về kỹ thuật nội soi:
+- Loại kỹ thuật: {modality_result.get('class_name', 'Không xác định')}
+- Đặc điểm: {modality_result.get('class_description', 'Không có thông tin chi tiết')}
+"""
+
+            region_info = ""
+            if "region_result" in state and state["region_result"].get("success", False):
+                region_result = state["region_result"]
+                region_info = f"""
+Thông tin về vùng giải phẫu:
+- Vùng: {region_result.get('class_name', 'Không xác định')}
+- Đặc điểm: {region_result.get('class_description', 'Không có thông tin chi tiết')} 
+"""
+
+            rag_info = ""
+            if "rag_result" in state and state["rag_result"].get("success", False):
+                rag_result = state["rag_result"]
+                rag_info = f"""
+Thông tin từ kiến thức y khoa:
+- Câu trả lời: {rag_result.get('answer', 'Không có thông tin')}
+- Nguồn: {', '.join(rag_result.get('sources', ['Không có nguồn']))}
+"""
+
+            reflection_info = ""
+            if "reflection_result" in state and state.get("reflection_result"):
+                reflection_result = state["reflection_result"]
+                if reflection_result.get("bias_detected", False):
+                    reflection_info = f"""
+Thông tin từ quá trình kiểm tra sai lệch:
+- Đã phát hiện sai lệch: Có
+- Câu trả lời ban đầu: {reflection_result.get('original_answer', 'Không có')}
+- Câu trả lời cải thiện: {reflection_result.get('improved_answer', 'Không có')}
+"""
+
+            # Tạo prompt tổng hợp
+            if polyp_count > 0:
+                # Has polyps
+                prompt = f"""
+{synthesis_prompt}
+Câu hỏi của bệnh nhân: {query}
+
+Kết quả phát hiện: Phát hiện {polyp_count} polyp
+Chi tiết: {'; '.join(polyp_details)}
+
+{vqa_info}
+{modality_info}
+{region_info}
+{rag_info}
+{reflection_info}
+
+Hãy viết một câu trả lời chi tiết, toàn diện giúp bệnh nhân hiểu rõ tình trạng và các bước tiếp theo, bao gồm:
+1. Mô tả chi tiết về những gì phát hiện được với ngôn ngữ dễ hiểu
+2. Ngụ ý y khoa và mức độ quan trọng của phát hiện 
+3. Đề xuất các bước tiếp theo (theo dõi, xét nghiệm thêm, điều trị...)
+4. Cung cấp một thông điệp trấn an nhưng trung thực
+5. Khuyến khích bệnh nhân chia sẻ thêm thông tin về tiền sử bệnh nếu cần thiết
+
+Sử dụng giọng điệu y khoa chuyên nghiệp.
+Trả lời theo định dạng sau:
+```json
+{{
+    "answer": "câu trả lời chi tiết",
+    "analysis": "phân tích chuyên sâu về ý nghĩa lâm sàng của các phát hiện"
+}}
+```
+"""
+            else:
+                # No polyps
+                prompt = f"""
+{synthesis_prompt}
+Câu hỏi của bệnh nhân: {query}
+
+Kết quả phát hiện: Không phát hiện polyp nào
+
+{vqa_info}
+{modality_info}
+{region_info}
+{rag_info}
+{reflection_info}
+
+Hãy viết một câu trả lời chi tiết, trấn an nhưng chuyên nghiệp, bao gồm:
+1. Xác nhận kết quả tốt từ hình ảnh nội soi
+2. Giải thích ý nghĩa của việc không phát hiện polyp
+3. Đề xuất các biện pháp phòng ngừa và theo dõi định kỳ nếu cần
+4. Khuyến khích bệnh nhân duy trì lối sống lành mạnh
+5. Hỏi về các triệu chứng hoặc lo lắng khác mà bệnh nhân có thể đang gặp phải
+
+Sử dụng giọng điệu y khoa chuyên nghiệp nhưng ấm áp, đầy thông cảm.
+Trả lời theo định dạng sau:
+```json
+{{
+    "answer": "câu trả lời chi tiết",
+    "analysis": "phân tích chuyên sâu về ý nghĩa lâm sàng của phát hiện"
+}}
+```
+"""
         
         try:
-            answer = llm.invoke([HumanMessage(content=prompt)]).content
+            # Use higher temperature for more natural language generation
+            custom_llm = ChatOpenAI(model=llm.model_name if hasattr(llm, 'model_name') else "gpt-4o-mini", temperature=0.7)
+            answer = custom_llm.invoke([HumanMessage(content=prompt)]).content
             final_result["answer"] = answer
             logger.info(f"Generated answer: {answer}")
         except Exception as e:

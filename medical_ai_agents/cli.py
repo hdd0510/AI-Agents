@@ -179,7 +179,6 @@ def main():
                         success=False,
                         error=result["error"]
                     )
-                
                 return AnalysisResponse(
                     success=True,
                     answer=result.get("answer"),

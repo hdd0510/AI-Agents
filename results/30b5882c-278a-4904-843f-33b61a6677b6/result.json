@@ -1,0 +1,31 @@
+{
+  "task_type": "comprehensive",
+  "success": true,
+  "session_id": "30b5882c-278a-4904-843f-33b61a6677b6",
+  "query": "Is this have polyp, if yes, is this polyp sessile or pedunculated and how many polyps are there?",
+  "polyps": [
+    {
+      "bbox": [
+        224.5865020751953,
+        80.4069595336914,
+        316.5220031738281,
+        226.2973175048828
+      ],
+      "confidence": 0.9039510488510132,
+      "class_id": 0,
+      "class_name": "polyp",
+      "width": 91.93550109863281,
+      "height": 145.8903579711914,
+      "center": [
+        270.5542526245117,
+        153.3521385192871
+      ],
+      "area": 13412.503165540402,
+      "position_description": "top center"
+    }
+  ],
+  "polyp_count": 1,
+  "summary": "Phát hiện 1 polyp trong hình ảnh.\nPolyp lớn nhất nằm ở vị trí top center với độ tin cậy 0.90.",
+  "processing_time": 16.05779242515564,
+  "answer": "Chào bạn, trong quá trình kiểm tra, chúng tôi đã phát hiện ra một polyp nằm ở phần trung tâm phía trên của khu vực được quan sát. Polyp này có khả năng rất cao thuộc loại polyp, nhưng hiện tại, thông tin chưa đủ để xác định rõ ràng là polyp có cuống (pedunculated) hay không cuống (sessile). Điều này có thể được làm rõ hơn thông qua các bước kiểm tra chi tiết hơn nếu cần thiết.\n\nVề mặt lâm sàng, việc phát hiện polyp là điều khá quan trọng vì một số loại polyp có thể phát triển thành vấn đề nghiêm trọng hơn nếu không được xử lý. Tuy nhiên, không phải tất cả các polyp đều gây ra nguy hiểm, và nhiều loại có thể được xử lý dễ dàng. Do đó, điều quan trọng là chúng tôi cần xác định chính xác loại polyp và đưa ra kế hoạch theo dõi hoặc điều trị phù hợp.\n\nBước tiếp theo có thể bao gồm thêm các xét nghiệm như nội soi để hiểu rõ hơn về kích thước, hình dạng và bản chất của polyp. Nếu bạn có tiền sử bệnh lý liên quan đến đường tiêu hóa hoặc đã từng gặp vấn đề tương tự, xin vui lòng chia sẻ thông tin này để giúp chúng tôi có cái nhìn toàn diện hơn về tình trạng của bạn.\n\nXin hãy yên tâm rằng chúng tôi sẽ đồng hành cùng bạn trong quá trình này và đảm bảo bạn nhận được sự chăm sóc tốt nhất. Nếu có bất kỳ câu hỏi hay lo lắng nào, đừng ngần ngại liên hệ với chúng tôi để được tư vấn thêm."
+}
