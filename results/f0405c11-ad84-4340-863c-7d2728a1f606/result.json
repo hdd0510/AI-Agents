@@ -1,0 +1,54 @@
+{
+  "task_type": "comprehensive",
+  "success": true,
+  "session_id": "f0405c11-ad84-4340-863c-7d2728a1f606",
+  "query": "Is this have polyp, if yes, is this polyp sessile or pedunculated and how many polyps are there?",
+  "timestamp": 1748283166.0873103,
+  "agent_results": {
+    "detector_result": {
+      "success": true,
+      "count": 2,
+      "objects": [
+        {
+          "position_description": "middle center",
+          "bbox": {
+            "x_min": 237.62,
+            "y_min": 242.96,
+            "x_max": 286.68,
+            "y_max": 292.75
+          },
+          "confidence": 0.8866,
+          "size": {
+            "width": 49.06,
+            "height": 49.79,
+            "area": 2442.48
+          }
+        },
+        {
+          "position_description": "middle center",
+          "bbox": {
+            "x_min": 262.4,
+            "y_min": 162.27,
+            "x_max": 306.82,
+            "y_max": 215.71
+          },
+          "confidence": 0.8435,
+          "size": {
+            "width": 44.42,
+            "height": 53.44,
+            "area": 2373.54
+          }
+        }
+      ],
+      "analysis": "Hai polyp đã được phát hiện với mức độ tin cậy cao. Polyp đầu tiên nằm ở vị trí trung tâm giữa hình ảnh với diện tích 2442.48 và độ tin cậy 88.66%. Polyp thứ hai cũng nằm ở vị trí trung tâm với diện tích 2373.54 và độ tin cậy 84.35%. Cả hai polyp đều có kích thước tương đối lớn, cho thấy khả năng là những polyp đáng chú ý cần theo dõi hoặc can thiệp."
+    },
+    "vqa_result": {
+      "success": true,
+      "answer": "Yes, this is a positive case showing a polyp. Based on the image, the polyp appears to be sessile, lacking a distinct stalk. There are two polyps visible in this view.",
+      "analysis": "Kết quả cho thấy có sự hiện diện của polyp trong hình ảnh nội soi. Cụ thể, có hai polyp được nhìn thấy, và chúng đều là polyp sessile, nghĩa là không có cuống rõ ràng. Điều này có thể gây ra những lo ngại về sức khỏe, vì polyp có thể là dấu hiệu của các vấn đề nghiêm trọng hơn trong đường tiêu hóa."
+    }
+  },
+  "final_answer": "Yes, this is a positive case showing a polyp. Based on the image, the polyp appears to be sessile, lacking a distinct stalk. There are two polyps visible in this view.",
+  "processing_time": 19.79379963874817,
+  "summary": "**Loại phân tích**: comprehensive\n**Phát hiện**: 2 polyp\n**Polyp chính**: 88.66% confidence, vị trí middle center\n**Nguồn trả lời**: Visual Q&A\n**Thời gian xử lý**: 19.8s"
+}
