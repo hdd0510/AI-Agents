@@ -6,12 +6,21 @@ Medical AI Chatbot Launcher
 ===========================
 Script khởi động chatbot với nhiều tùy chọn cấu hình.
 """
+# ---- PATCH Pydantic ↔ Starlette Request -------------------------------------
+from starlette.requests import Request as _StarletteRequest
+from pydantic_core import core_schema
 
+def _any_schema(*_):        # chấp mọi số đối số
+    return core_schema.any_schema()
+
+_StarletteRequest.__get_pydantic_core_schema__ = classmethod(_any_schema)
+# -----------------------------------------------------------------------------
 import argparse
 import os
 import sys
 import json
 from pathlib import Path
+os.environ['GRADIO_TEMP_DIR'] = '/tmp'
 
 # Add project root to path
 project_root = Path(__file__).parent
@@ -115,7 +124,7 @@ def create_enhanced_chatbot():
     """Tạo chatbot với cấu hình nâng cao."""
     
     import gradio as gr
-    from medical_ai_chatbot import MedicalAIChatbot, LongShortTermMemory
+    from medical_ai_agents.memory import MedicalAIChatbot, LongShortTermMemory
     from medical_ai_agents import MedicalGraphConfig
     
     # Load config
@@ -221,7 +230,6 @@ def create_enhanced_chatbot():
                             height=self.app_config.get("ui.chat_height", 500),
                             show_copy_button=True,
                             elem_classes=["chat-container"],
-                            avatar_images=("🧑‍⚕️", "🤖")
                         )
                         
                         with gr.Row():
@@ -433,7 +441,6 @@ def main():
             share=config.get("app.share"),
             debug=config.get("app.debug"),
             show_error=True,
-            favicon_path="🏥"
         )
         
     except Exception as e:

@@ -98,6 +98,9 @@ class LLaVATool(BaseTool):
     
     def _load_image(self, image_file: str) -> Image.Image:
         """Load image exactly like CLI version."""
+        print("--------------------------------")
+        print(f"Loading image: {image_file}")
+        print("--------------------------------")
         if image_file.startswith('http://') or image_file.startswith('https://'):
             response = requests.get(image_file)
             image = Image.open(BytesIO(response.content)).convert('RGB')

@@ -1,0 +1,36 @@
+{
+  "app": {
+    "title": "Medical AI Assistant",
+    "description": "Hệ thống AI hỗ trợ phân tích hình ảnh nội soi",
+    "host": "0.0.0.0",
+    "port": 7860,
+    "share": true,
+    "debug": false
+  },
+  "medical_ai": {
+    "device": "cuda",
+    "use_reflection": true,
+    "detector_model_path": "medical_ai_agents/weights/detect_best.pt",
+    "vqa_model_path": "medical_ai_agents/weights/llava-med-mistral-v1.5-7b",
+    "modality_classifier_path": "medical_ai_agents/weights/modal_best.pt",
+    "region_classifier_path": "medical_ai_agents/weights/location_best.pt"
+  },
+  "memory": {
+    "db_path": "medical_ai_memory.db",
+    "short_term_limit": 10,
+    "enable_long_term": true,
+    "auto_save_important": true
+  },
+  "ui": {
+    "theme": "soft",
+    "chat_height": 500,
+    "enable_stats": true,
+    "enable_history": true,
+    "max_file_size": "10MB"
+  },
+  "security": {
+    "enable_user_auth": false,
+    "max_sessions": 100,
+    "session_timeout": 3600
+  }
+}
