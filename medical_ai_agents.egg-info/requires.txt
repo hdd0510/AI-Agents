@@ -31,4 +31,4 @@ einops==0.6.1
 einops-exts==0.0.4
 timm==0.6.13
 
-medical-ai analyze --image /mnt/dunghd/vllm/LLaVA-Med/data/data_mask/val/images/2e6177b0-7014-11ea-8db9-7bd75924486b.png --query "Is this have polyp, if yes, is this polyp sessile or pedunculated and how many polyps are there?" --device cuda
+medical-ai analyze --image /mnt/dunghd/vllm/LLaVA-Med/data/data_mask/val/images/2e6177b0-7014-11ea-8db9-7bd75924486b.png --query "what is the modality of this endoscopy image?" --device cuda

@@ -222,7 +222,7 @@ def create_enhanced_chatbot():
                     - 📊 **Thống kê chi tiết**: Theo dõi tiến trình sức khỏe qua thời gian
                     """)
                 
-                with gr.Row():
+                with gr.Row():  
                     with gr.Column(scale=3):
                         # Main chat interface
                         chatbot = gr.Chatbot(
