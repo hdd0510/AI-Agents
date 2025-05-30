@@ -129,15 +129,15 @@ llava_vqa: Công cụ trả lời câu hỏi dựa trên hình ảnh sử dụng
         return """
         Dựa trên kết quả từ tools, bạn phải xác định:
         - Mô tả lại kết quả từ vqa với lối hành văn rõ ràng, dễ hiểu với người dùng
-        - Không bịa đặt câu trả lời mà cần bám sát với nội dung của câu trả lời từ tools
-        - Nếu không phát hiện polyp, hãy xác nhận điều đó và giải thích lý do có thể
+        - Dựa vào input và kết quả từ tools để xác định trả lời câu hỏi 1 cách chuẩn nhất
+        - Nếu không phát hiện polyp, hãy xác nhận điều đó và giải thích lý do có thể, kèm theo các thông tin khác nếu có
         Trả lời theo định dạng sau:
         ```json
         {
             "vqa_result": {
                 "success": true/false,
                 "answer": "câu trả lời chi tiết từ tools llava_vqa",
-                "analysis": "Mô tả lại kết quả từ llava vqa với lối hành văn trôi trảy mạch lạc"
+                "analysis": "câu trả lời cuối cùng của bạn dựa trên kết quả từ tools và cont"
             }
         }
         ```

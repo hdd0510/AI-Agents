@@ -152,7 +152,7 @@ Start with your REASONING, then provide TOOL_PLAN:"""
         """Format synthesis input for LLM prompt."""
         return """
 **SYNTHESIS TASK:**
-Based on tool execution results, provide comprehensive analysis:
+Based on tool execution results in image and user query, provide comprehensive analysis:
 
 **Required Output Format:**
 ```json
@@ -164,7 +164,6 @@ Based on tool execution results, provide comprehensive analysis:
     "analysis": "Professional medical interpretation of findings",
     "visualization_available": true/false,
     "visualization_base64": "base64_string_if_available",
-    "reasoning": "Explanation of tool choices and medical significance"
   }
 }
 ```
@@ -468,8 +467,6 @@ Based on tool execution results, provide comprehensive analysis:
             
             synthesis_response = self.llm.invoke(synthesis_messages)
             agent_result = self._extract_agent_result(synthesis_response.content)
-            print("agent_result")
-            print(agent_result)
             # Add visualization info if available
             if "visualize_detections" in tool_outputs:
                 viz_result = tool_outputs["visualize_detections"]

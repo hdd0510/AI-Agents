@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Medical AI Chat Interface with Long Short Term Memory
+Medical AI Chat Interface with Long Short Term Memory - FIXED IMAGE DISPLAY
 ===================================================
 Giao diện chatbot Gradio với khả năng nhớ ngắn hạn và dài hạn cho hệ thống AI y tế.
 """
@@ -18,6 +18,7 @@ import os
 import tempfile
 from pathlib import Path
 import logging
+import base64
 
 # Import medical AI system
 from medical_ai_agents import MedicalAISystem, MedicalGraphConfig
@@ -271,37 +272,21 @@ class MedicalAIChatbot:
                             response_parts.append(f"- Số lượng polyp: {detector['count']}")
                             response_parts.append(f"- Độ tin cậy: {detector['objects'][0]['confidence']:.2%}")
                             
-                            # Thêm ảnh visualization nếu có
+                            # FIXED: Hiển thị ảnh visualization trong chat
                             if detector.get("visualization_base64") and detector.get("visualization_available"):
                                 # Lưu base64 vào session_state để sử dụng sau
                                 session_state["last_visualization"] = detector.get("visualization_base64")
                                 
-                                # Tạo ảnh từ base64 và lưu vào file tạm
-                                import base64
-                                import tempfile
-                                import os
+                                # Tạo data URL từ base64
+                                img_data_url = f"data:image/png;base64,{detector.get('visualization_base64')}"
                                 
-                                temp_dir = tempfile.gettempdir()
-                                temp_file = os.path.join(temp_dir, f"viz_{session_id}.png")
+                                # FIXED: Sử dụng HTML img tag thay vì markdown
+                                response_parts.append(f"\n\n📊 **Kết quả phát hiện polyp:**")
+                                response_parts.append(f'<img src="{img_data_url}" alt="Kết quả phát hiện polyp" style="max-width: 100%; height: auto; border-radius: 8px; margin: 10px 0;">')
                                 
-                                try:
-                                    img_data = base64.b64decode(detector.get("visualization_base64"))
-                                    with open(temp_file, "wb") as f:
-                                        f.write(img_data)
-                                    
-                                    # Lưu đường dẫn ảnh visualization vào session_state
-                                    session_state["viz_image_path"] = temp_file
-                                    
-                                    # Thêm ảnh với format markdown để hiển thị trực tiếp trong chat
-                                    response_parts.append(f"\n\n📊 **Kết quả phát hiện polyp:**")
-                                    response_parts.append(f"![Kết quả phát hiện polyp]({temp_file})")
-                                    
-                                    # Thêm ảnh trực tiếp vào chat history
-                                    session_state["has_image_result"] = True
-                                    session_state["last_result_image"] = temp_file
-                                except Exception as e:
-                                    logger.error(f"Error creating visualization image: {str(e)}")
-                                    response_parts.append("\n⚠️ *Không thể hiển thị ảnh kết quả*")
+                                # Lưu thông tin ảnh vào session_state
+                                session_state["has_image_result"] = True
+                                session_state["last_result_image_data"] = img_data_url
                     
                     # Add medical recommendations
                     response_parts.append("\n💡 **Khuyến nghị:**")
@@ -374,7 +359,7 @@ class MedicalAIChatbot:
         return "\n".join(stats)
     
     def create_interface(self) -> gr.Blocks:
-        """Tạo giao diện Gradio."""
+        """Tạo giao diện Gradio với hiển thị ảnh đã được fix."""
         
         with gr.Blocks(
             title="Medical AI Assistant", 
@@ -383,6 +368,14 @@ class MedicalAIChatbot:
             .main-container { max-width: 1200px; margin: 0 auto; }
             .chat-container { height: 600px; }
             .upload-container { border: 2px dashed #ccc; padding: 20px; text-align: center; }
+            /* Đảm bảo ảnh hiển thị đúng trong chat */
+            .message img {
+                max-width: 100%;
+                height: auto;
+                border-radius: 8px;
+                margin: 10px 0;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }
             """
         ) as interface:
             
@@ -402,25 +395,29 @@ class MedicalAIChatbot:
             
             with gr.Row():
                 with gr.Column(scale=2):
-                    # Chat interface
+                    # Chat interface - FIXED: Enable HTML rendering
                     chatbot = gr.Chatbot(
-                        label="Cuộc trò chuyện",
+                        label="💬 Cuộc trò chuyện với AI",
                         height=500,
                         show_copy_button=True,
-                        elem_classes=["chat-container"]
+                        elem_classes=["chat-container"],
+                        layout="bubble",
+                        render_markdown=True,  # Enable HTML rendering
+                        sanitize_html=False,   # Allow HTML images
                     )
                     
                     with gr.Row():
                         msg_input = gr.Textbox(
-                            placeholder="Nhập câu hỏi hoặc mô tả triệu chứng...",
-                            label="Tin nhắn",
-                            scale=4
+                            placeholder="💭 Hãy mô tả triệu chứng hoặc đặt câu hỏi về hình ảnh...",
+                            label="Tin nhắc của bạn",
+                            scale=4,
+                            lines=2
                         )
-                        send_btn = gr.Button("Gửi", variant="primary", scale=1)
+                        send_btn = gr.Button("📤 Gửi", variant="primary", scale=1)
                     
                     # Image upload
                     image_input = gr.Image(
-                        label="Tải lên hình ảnh nội soi",
+                        label="🖼️ Tải lên hình ảnh nội soi",
                         type="filepath",
                         elem_classes=["upload-container"]
                     )

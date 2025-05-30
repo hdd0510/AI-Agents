@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Medical AI Chatbot Launcher
+Medical AI Chatbot Launcher - FIXED với Image Display + Streaming
 ===========================
 Script khởi động chatbot với nhiều tùy chọn cấu hình.
 """
@@ -19,6 +19,7 @@ import argparse
 import os
 import sys
 import json
+import time
 from pathlib import Path
 os.environ['GRADIO_TEMP_DIR'] = '/tmp'
 
@@ -131,7 +132,7 @@ def create_enhanced_chatbot():
     config = MedicalAIConfig()
     
     class EnhancedMedicalAIChatbot(MedicalAIChatbot):
-        """Chatbot với các tính năng nâng cao."""
+        """Chatbot với các tính năng nâng cao + streaming."""
         
         def __init__(self, config: MedicalAIConfig):
             self.app_config = config
@@ -151,38 +152,219 @@ def create_enhanced_chatbot():
             from medical_ai_agents import MedicalAISystem
             return MedicalAISystem(medical_config)
         
+        def process_message_streaming(self, message, image, history, username, session_state):
+            """STREAMING version của process_message."""
+            import uuid
+            
+            # Generate session and user IDs
+            session_id = session_state.get("session_id", str(uuid.uuid4()))
+            user_id = self.generate_user_id(username)
+            
+            session_state["session_id"] = session_id
+            session_state["user_id"] = user_id
+            
+            # Start with user message
+            history.append([message, "🤔 Đang phân tích..."])
+            yield "", history, session_state
+            
+            try:
+                response_parts = []
+                analysis_result = None
+                
+                # Get contextual information
+                context = self.memory.get_contextual_prompt(session_id, user_id)
+                
+                # Process image if provided
+                if image is not None:
+                    # Streaming progress
+                    history[-1][1] = "🔍 Đang phân tích hình ảnh..."
+                    yield "", history, session_state
+                    time.sleep(0.5)
+                    
+                    # Analyze image with Medical AI
+                    history[-1][1] = "⚙️ Chạy AI detection..."
+                    yield "", history, session_state
+                    
+                    result = self.medical_ai.analyze(
+                        image_path=image,
+                        query=message,
+                        medical_context={"user_context": context} if context else None
+                    )
+                    
+                    analysis_result = result
+                    
+                    if result.get("success", False):
+                        # Stream response parts
+                        history[-1][1] = "📝 Đang tạo báo cáo..."
+                        yield "", history, session_state
+                        time.sleep(0.3)
+                        
+                        # Create comprehensive response
+                        if "final_answer" in result:
+                            response_parts.append("🔍 **Kết quả phân tích hình ảnh:**")
+                            
+                            # Stream the final answer word by word (tùy chọn)
+                            final_answer = result["final_answer"]
+                            streaming_text = "🔍 **Kết quả phân tích hình ảnh:**\n\n"
+                            
+                            words = final_answer.split()
+                            for i, word in enumerate(words):
+                                streaming_text += word + " "
+                                if i % 5 == 0:  # Update every 5 words
+                                    history[-1][1] = streaming_text + "..."
+                                    yield "", history, session_state
+                                    time.sleep(0.1)
+                            
+                            response_parts = [streaming_text.rstrip()]
+                        
+                        # Add detection details
+                        if "agent_results" in result and "detector_result" in result["agent_results"]:
+                            detector = result["agent_results"]["detector_result"]
+                            if detector.get("success") and detector.get("count", 0) > 0:
+                                detection_info = f"\n\n📊 **Chi tiết phát hiện:**\n"
+                                detection_info += f"- Số lượng polyp: {detector['count']}\n"
+                                detection_info += f"- Độ tin cậy: {detector['objects'][0]['confidence']:.2%}\n"
+                                
+                                response_parts.append(detection_info)
+                                
+                                # Stream detection info
+                                current_response = "\n".join(response_parts)
+                                history[-1][1] = current_response
+                                yield "", history, session_state
+                                time.sleep(0.5)
+                                
+                                # FIXED: Hiển thị ảnh visualization trong chat
+                                if detector.get("visualization_base64") and detector.get("visualization_available"):
+                                    # Lưu base64 vào session_state để sử dụng sau
+                                    session_state["last_visualization"] = detector.get("visualization_base64")
+                                    
+                                    # Tạo data URL từ base64
+                                    img_data_url = f"data:image/png;base64,{detector.get('visualization_base64')}"
+                                    
+                                    # FIXED: Sử dụng HTML img tag thay vì markdown
+                                    viz_html = f'\n\n📊 **Kết quả phát hiện polyp:**\n<img src="{img_data_url}" alt="Kết quả phát hiện polyp" style="max-width: 100%; height: auto; border-radius: 8px; margin: 10px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">'
+                                    
+                                    response_parts.append(viz_html)
+                                    
+                                    # Stream với ảnh
+                                    current_response = "\n".join(response_parts)
+                                    history[-1][1] = current_response
+                                    yield "", history, session_state
+                                    time.sleep(0.5)
+                                    
+                                    # Lưu thông tin ảnh vào session_state
+                                    session_state["has_image_result"] = True
+                                    session_state["last_result_image_data"] = img_data_url
+                        
+                        # Add medical recommendations
+                        recommendations = "\n\n💡 **Khuyến nghị:**\n"
+                        if result.get("polyp_count", 0) > 0:
+                            recommendations += "- Nên tham khảo ý kiến bác sĩ chuyên khoa\n"
+                            recommendations += "- Theo dõi định kỳ theo lịch hẹn"
+                        else:
+                            recommendations += "- Duy trì lối sống lành mạnh\n"
+                            recommendations += "- Kiểm tra định kỳ theo khuyến nghị"
+                        
+                        response_parts.append(recommendations)
+                        
+                        # Final response
+                        final_response = "\n".join(response_parts)
+                        history[-1][1] = final_response
+                        yield "", history, session_state
+                        
+                    else:
+                        error_response = "❌ Có lỗi trong quá trình phân tích hình ảnh.\n"
+                        error_response += f"Chi tiết lỗi: {result.get('error', 'Unknown error')}"
+                        history[-1][1] = error_response
+                        yield "", history, session_state
+                
+                else:
+                    # Text-only conversation - stream response
+                    text_response = "💬 **Trả lời:**\n\n"
+                    
+                    if context:
+                        text_response += "💭 **Dựa trên thông tin trước đó:**\n"
+                        text_response += (context[:200] + "..." if len(context) > 200 else context) + "\n\n"
+                    
+                    text_response += "Tôi có thể giúp bạn phân tích hình ảnh nội soi và trả lời các câu hỏi y tế. "
+                    text_response += "Vui lòng tải lên hình ảnh để tôi có thể hỗ trợ tốt hơn."
+                    
+                    # Stream text response
+                    words = text_response.split()
+                    streaming_text = ""
+                    for i, word in enumerate(words):
+                        streaming_text += word + " "
+                        if i % 3 == 0:  # Update every 3 words
+                            history[-1][1] = streaming_text
+                            yield "", history, session_state
+                            time.sleep(0.05)
+                    
+                    history[-1][1] = streaming_text.strip()
+                    yield "", history, session_state
+                
+                # Save to memory
+                final_response = history[-1][1]
+                interaction = {
+                    "query": message,
+                    "response": final_response,
+                    "has_image": image is not None,
+                    "analysis": analysis_result,
+                    "polyp_count": analysis_result.get("polyp_count", 0) if analysis_result else 0
+                }
+                
+                self.memory.add_to_short_term(session_id, interaction)
+                
+                # Save important interactions to long term
+                if image is not None or "polyp" in message.lower():
+                    self.memory.save_to_long_term(user_id, session_id, interaction)
+                
+            except Exception as e:
+                error_response = f"❌ Xin lỗi, có lỗi xảy ra: {str(e)}"
+                history[-1][1] = error_response
+                yield "", history, session_state
+        
         def create_enhanced_interface(self):
             """Tạo giao diện với nhiều tính năng hơn."""
             
-            # Custom CSS
+            # Custom CSS with image support
             custom_css = """
             .main-container { 
-                max-width: 1400px; 
+                max-width: 1200px; 
                 margin: 0 auto;
                 font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             }
             .header-section {
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                 color: white;
-                padding: 2rem;
+                padding: 1.5rem;
                 border-radius: 10px;
-                margin-bottom: 2rem;
+                margin-bottom: 1.5rem;
                 text-align: center;
             }
             .chat-container { 
                 height: 600px; 
                 border-radius: 10px;
                 box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+                margin-bottom: 1rem;
+                width: 100%;
             }
-            /* Cải thiện hiển thị ảnh trong chat */
+            /* FIXED: Cải thiện hiển thị ảnh trong chat */
             .chat-container img {
-                max-width: 80%;
-                max-height: 400px;
-                border-radius: 8px;
-                margin: 10px auto;
-                display: block;
-                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-                border: 1px solid rgba(0, 0, 0, 0.1);
+                max-width: 80% !important;
+                max-height: 400px !important;
+                border-radius: 8px !important;
+                margin: 10px auto !important;
+                display: block !important;
+                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2) !important;
+                border: 1px solid rgba(0, 0, 0, 0.1) !important;
+            }
+            /* Ensure images in message bubble are properly styled */
+            .message img {
+                max-width: 100% !important;
+                height: auto !important;
+                border-radius: 8px !important;
+                margin: 10px 0 !important;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
             }
             .upload-container { 
                 border: 2px dashed #4CAF50; 
@@ -190,23 +372,24 @@ def create_enhanced_chatbot():
                 text-align: center;
                 border-radius: 10px;
                 background: #f8f9fa;
+                margin-bottom: 1rem;
             }
-            .stats-panel {
-                background: #e3f2fd;
-                padding: 1rem;
-                border-radius: 8px;
-                margin: 1rem 0;
-            }
-            .quick-actions {
+            .chat-input-container {
                 display: flex;
-                flex-direction: column;
+                width: 100%;
+                margin: 0.5rem 0;
                 gap: 0.5rem;
             }
-            .memory-info {
-                background: #fff3e0;
-                padding: 1rem;
-                border-radius: 8px;
-                border-left: 4px solid #ff9800;
+            .tab-container {
+                margin-top: 1rem;
+                border-radius: 10px;
+                overflow: hidden;
+                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            }
+            .button-row {
+                display: flex;
+                gap: 0.5rem;
+                margin: 0.5rem 0;
             }
             """
             
@@ -229,32 +412,37 @@ def create_enhanced_chatbot():
                     - 🧠 **Trí nhớ thông minh**: Ghi nhớ lịch sử và cá nhân hóa trải nghiệm
                     - 🔍 **Phân tích chính xác**: Sử dụng AI đa agent với độ tin cậy cao
                     - 💬 **Tương tác tự nhiên**: Chat thông minh với khả năng hiểu ngữ cảnh
-                    - 📊 **Thống kê chi tiết**: Theo dõi tiến trình sức khỏe qua thời gian
+                    - 📊 **Streaming response**: Phản hồi real-time thay vì chờ đợi
                     """)
                 
-                with gr.Row():  
-                    with gr.Column(scale=3):
-                        # Main chat interface
+                with gr.Row():
+                    # Main chat interface in a centered column
+                    with gr.Column(scale=1, min_width=800):
+                        # Chat container - FIXED: Enable HTML rendering for images
                         chatbot = gr.Chatbot(
                             label="💬 Cuộc trò chuyện với AI",
-                            height=self.app_config.get("ui.chat_height", 500),
+                            height=self.app_config.get("ui.chat_height", 650),
                             show_copy_button=True,
                             elem_classes=["chat-container"],
                             layout="bubble",
                             render_markdown=True,
+                            sanitize_html=False,  # FIXED: Allow HTML images
                         )
                         
-                        with gr.Row():
+                        # Input and buttons in a clean layout
+                        with gr.Row(elem_classes=["chat-input-container"]):
                             msg_input = gr.Textbox(
                                 placeholder="💭 Hãy mô tả triệu chứng hoặc đặt câu hỏi về hình ảnh...",
                                 label="Tin nhắc của bạn",
                                 scale=5,
                                 lines=2
                             )
-                            send_btn = gr.Button("📤 Gửi", variant="primary", scale=1)
+                            with gr.Column(scale=1, elem_classes=["button-row"]):
+                                send_btn = gr.Button("📤 Gửi", variant="primary", size="lg")
+                                clear_btn = gr.Button("🗑️ Xóa", variant="stop", size="lg")
                         
-                        # Add visualization display area
-                        tabs = gr.Tabs()
+                        # Tabs for image upload and results
+                        tabs = gr.Tabs(elem_classes=["tab-container"])
                         with tabs:
                             with gr.TabItem("🖼️ Tải ảnh"):
                                 # Advanced image upload
@@ -269,6 +457,7 @@ def create_enhanced_chatbot():
                                 - Hỗ trợ định dạng: JPG, PNG, DICOM
                                 - Kích thước tối đa: 10MB
                                 - Đảm bảo hình ảnh rõ nét cho kết quả tốt nhất
+                                - **Ảnh kết quả sẽ hiển thị trực tiếp trong chat**
                                 """)
                             
                             with gr.TabItem("📊 Kết quả phát hiện"):
@@ -279,61 +468,14 @@ def create_enhanced_chatbot():
                                 )
                                 
                                 show_latest_result_btn = gr.Button("🔄 Hiển thị kết quả mới nhất", variant="secondary")
-                    
-                    with gr.Column(scale=1):
-                        # User panel
-                        with gr.Accordion("👤 Thông tin cá nhân", open=True):
-                            username_input = gr.Textbox(
-                                label="Tên của bạn",
-                                placeholder="Nhập tên để cá nhân hóa...",
-                                value="Bệnh nhân"
-                            )
-                            
-                            user_info = gr.Textbox(
-                                label="Thông tin bổ sung",
-                                placeholder="Tuổi, tiền sử bệnh, thuốc đang dùng...",
-                                lines=3
-                            )
-                        
-                        # Stats panel
-                        with gr.Accordion("📊 Thống kê của bạn", open=False):
-                            stats_display = gr.Markdown(
-                                "📈 Chưa có dữ liệu thống kê",
-                                elem_classes=["stats-panel"]
-                            )
-                            stats_btn = gr.Button("🔄 Cập nhật thống kê", variant="secondary")
-                        
-                        # Quick actions
-                        with gr.Accordion("⚡ Thao tác nhanh", open=True):
-                            with gr.Column(elem_classes=["quick-actions"]):
-                                quick_polyp_btn = gr.Button("🔍 Kiểm tra polyp", size="sm")
-                                quick_general_btn = gr.Button("🩺 Tư vấn tổng quát", size="sm")
-                                history_btn = gr.Button("📜 Xem lịch sử", size="sm")
-                                export_btn = gr.Button("💾 Xuất báo cáo", size="sm")
-                                clear_btn = gr.Button("🗑️ Xóa cuộc trò chuyện", size="sm", variant="stop")
-                        
-                        # Memory and AI info
-                        with gr.Accordion("🧠 Trí nhớ AI", open=False):
-                            gr.Markdown("""
-                            <div class="memory-info">
-                            <h4>🤖 Khả năng AI:</h4>
-                            <ul>
-                                <li><strong>Ngắn hạn:</strong> Nhớ 10 tương tác gần nhất</li>
-                                <li><strong>Dài hạn:</strong> Lưu kết quả quan trọng</li>
-                                <li><strong>Học tập:</strong> Cải thiện theo thời gian</li>
-                                <li><strong>Bảo mật:</strong> Dữ liệu được mã hóa</li>
-                            </ul>
-                            </div>
-                            """)
-                            
-                            memory_status = gr.Textbox(
-                                label="Trạng thái bộ nhớ",
-                                value="✅ Đang hoạt động bình thường",
-                                interactive=False
-                            )
                 
-                # Event handlers với error handling
-                def safe_process_message(message, image, history, username, user_info, state):
+                # Hidden state for username (required for functions)
+                username_input = gr.Textbox(value="Bệnh nhân", visible=False)
+                user_info = gr.Textbox(value="", visible=False)
+                
+                # FIXED: Event handlers với streaming support
+                def safe_process_message_streaming(message, image, history, username, user_info, state):
+                    """Wrapper cho streaming function."""
                     try:
                         # Add user info to medical context
                         if user_info.strip():
@@ -341,25 +483,24 @@ def create_enhanced_chatbot():
                                 state["medical_context"] = {}
                             state["medical_context"]["user_info"] = user_info
                         
-                        msg, history, updated_state = self.process_message(message, image, history, username, state)
+                        # Use streaming version
+                        for msg, hist, updated_state in self.process_message_streaming(message, image, history, username, state):
+                            yield msg, hist, updated_state, None
                         
-                        # Nếu có hình ảnh kết quả mới, lưu trạng thái và hiển thị lên result_image
-                        if "viz_image_path" in updated_state and updated_state["viz_image_path"]:
-                            return msg, history, updated_state, updated_state["viz_image_path"]
-                        else:
-                            return msg, history, updated_state, None
+                        # Check for visualization result
+                        if "last_result_image_data" in updated_state:
+                            # Convert data URL back to filepath if needed
+                            # For now, just yield the state
+                            yield msg, hist, updated_state, None
+                            
                     except Exception as e:
                         error_msg = f"❌ Lỗi xử lý: {str(e)}"
-                        history.append([message, error_msg])
-                        return "", history, state, None
-                
-                # Hàm để chuyển tab khi có kết quả mới
-                def switch_to_results_tab(state):
-                    if "viz_image_path" in state and state["viz_image_path"]:
-                        # Chuyển sang tab kết quả
-                        return 1  # Index của tab kết quả
-                    return 0  # Giữ nguyên tab hiện tại
-                
+                        if history:
+                            history[-1][1] = error_msg
+                        else:
+                            history.append([message, error_msg])
+                        yield "", history, state, None
+
                 def show_latest_visualization(state):
                     """Hiển thị kết quả phát hiện mới nhất từ session state"""
                     try:
@@ -370,56 +511,17 @@ def create_enhanced_chatbot():
                     except Exception as e:
                         return None
                 
-                def safe_update_stats(username):
-                    try:
-                        return self.get_user_stats(username)
-                    except Exception as e:
-                        return f"❌ Lỗi lấy thống kê: {str(e)}"
-                
-                def export_chat_history(chat_history, username):
-                    """Xuất lịch sử chat ra file."""
-                    if not chat_history:
-                        return "❌ Không có dữ liệu để xuất"
-                    
-                    try:
-                        import datetime
-                        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                        filename = f"medical_chat_{username}_{timestamp}.txt"
-                        
-                        with open(filename, 'w', encoding='utf-8') as f:
-                            f.write(f"=== Medical AI Chat History ===\n")
-                            f.write(f"User: {username}\n")
-                            f.write(f"Date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                            f.write("="*50 + "\n\n")
-                            
-                            for i, (user_msg, ai_msg) in enumerate(chat_history, 1):
-                                f.write(f"[{i}] User: {user_msg}\n")
-                                f.write(f"[{i}] AI: {ai_msg}\n")
-                                f.write("-"*30 + "\n")
-                        
-                        return f"✅ Đã xuất lịch sử ra file: {filename}"
-                    except Exception as e:
-                        return f"❌ Lỗi xuất file: {str(e)}"
-                
-                # Connect all events
+                # Connect all events với streaming
                 send_btn.click(
-                    safe_process_message,
+                    safe_process_message_streaming,
                     inputs=[msg_input, image_input, chatbot, username_input, user_info, session_state],
                     outputs=[msg_input, chatbot, session_state, result_image]
-                ).then(
-                    lambda state: gr.update(selected=1) if "viz_image_path" in state and state["viz_image_path"] else gr.update(),
-                    inputs=[session_state],
-                    outputs=[tabs]
                 )
                 
                 msg_input.submit(
-                    safe_process_message,
+                    safe_process_message_streaming,
                     inputs=[msg_input, image_input, chatbot, username_input, user_info, session_state],
                     outputs=[msg_input, chatbot, session_state, result_image]
-                ).then(
-                    lambda state: gr.update(selected=1) if "viz_image_path" in state and state["viz_image_path"] else gr.update(),
-                    inputs=[session_state],
-                    outputs=[tabs]
                 )
                 
                 show_latest_result_btn.click(
@@ -431,29 +533,7 @@ def create_enhanced_chatbot():
                     outputs=[tabs]
                 )
                 
-                stats_btn.click(
-                    safe_update_stats,
-                    inputs=[username_input],
-                    outputs=[stats_display]
-                )
-                
                 clear_btn.click(lambda: [], outputs=[chatbot])
-                
-                quick_polyp_btn.click(
-                    lambda: "Hãy phân tích hình ảnh này và cho tôi biết có phát hiện polyp không? Nếu có, xin mô tả chi tiết.",
-                    outputs=[msg_input]
-                )
-                
-                quick_general_btn.click(
-                    lambda: "Tôi cần tư vấn y tế tổng quát dựa trên hình ảnh. Xin đánh giá tình trạng sức khỏe.",
-                    outputs=[msg_input]
-                )
-                
-                export_btn.click(
-                    export_chat_history,
-                    inputs=[chatbot, username_input],
-                    outputs=[gr.Textbox(visible=False)]  # Show result in console
-                )
             
             return interface
     
@@ -492,6 +572,7 @@ def main():
     print(f"🔌 Port: {config.get('app.port')}")
     print(f"🌐 Share: {config.get('app.share')}")
     print(f"🖥️  Device: {config.get('medical_ai.device')}")
+    print(f"🎬 Features: Image Display + Streaming Response")
     
     try:
         # Create enhanced chatbot
