@@ -357,7 +357,7 @@ Kết quả phân tích từ hệ thống AI:
 
 Yêu cầu:
 - Bạn chính là chủ thể của phần phân tích, hãy chủ động đưa ra nhận định và dựa trên các kết quả phân tích để trả lời câu hỏi của bệnh nhân.
-- Không liệt kê kết quả một cách quá thô mà hãy dùng lời văn để diễn giải kết quả.
+- Không liệt kê kết quả một cách quá thô mà hãy dùng lời văn để diễn giải kết quả (không đưa ra các con số như 80%,... của agents mà phải dùng ngôn từ diễn đạt).
 - Diễn giải kết quả một cách mạch lạc, kết nối các thông tin từ các nguồn khác nhau thành một nhận định y khoa cuối cùng.
 - Đưa ra kết luận rõ ràng về tình trạng của bệnh nhân dựa trên các kết quả.
 - Đưa ra khuyến nghị y khoa phù hợp, thực tế.

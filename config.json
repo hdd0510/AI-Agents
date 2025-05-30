@@ -3,7 +3,7 @@
     "title": "Medical AI Assistant",
     "description": "Hệ thống AI hỗ trợ phân tích hình ảnh nội soi",
     "host": "0.0.0.0",
-    "port": 7860,
+    "port": 8000,
     "share": true,
     "debug": false
   },

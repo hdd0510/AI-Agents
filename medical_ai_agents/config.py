@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Medical AI System - Configuration
+Medical AI System - Configuration (MODIFIED for text-only support)
 --------------------------------
 Cấu hình và định nghĩa kiểu cho hệ thống AI y tế đa agent.
 """
@@ -19,6 +19,7 @@ class TaskType(str, Enum):
     REGION_CLASSIFICATION = "region_classification"
     MEDICAL_QA = "medical_qa"
     COMPREHENSIVE = "comprehensive"
+    TEXT_ONLY = "text_only"  # NEW: For text-only queries
 
 class DetectionResult(TypedDict, total=False):
     """Kết quả từ Detector Agent."""
@@ -61,6 +62,7 @@ class SystemState(TypedDict, total=False):
     image_path: str
     query: Optional[str]
     medical_context: Optional[Dict[str, Any]]
+    is_text_only: bool  # NEW: Flag indicating text-only mode
     
     # Processing
     session_id: str

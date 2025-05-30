@@ -123,7 +123,6 @@ Parameters: {"image_path": "path", "detections": <results_from_yolo>}
         image_path = task_input.get("image_path", "")
         query = task_input.get("query", "")
         context = task_input.get("medical_context", {})
-        user_type = task_input.get("user_type", "patient")
         
         context_str = "\n".join([f"- {k}: {v}" for k, v in context.items()]) if context else "- None"
         
@@ -131,19 +130,17 @@ Parameters: {"image_path": "path", "detections": <results_from_yolo>}
 
 Image to analyze: {image_path}
 User query: "{query if query else 'Analyze for polyps'}"
-User type: {user_type}
 Medical context:
 {context_str}
 
 **YOUR MISSION:**
 1. First, REASON about the user's intent and what would be most helpful
-2. Decide which tools to use and in what order
+2. Decide which tools to use (always use yolo_detection first, then visualize_detections if needed)
 3. Execute your tool plan
 
 **REASONING GUIDELINES:**
 - Consider if user wants to SEE results or just know findings
 - Think about medical value of visualization
-- Factor in user type (patients often benefit from visual explanations)
 - Consider detected polyp count/significance
 
 Start with your REASONING, then provide TOOL_PLAN:"""
@@ -161,7 +158,7 @@ Based on tool execution results in image and user query, provide comprehensive a
     "success": true/false,
     "count": number_of_polyps,
     "objects": [...detected polyps with details...],
-    "analysis": "Professional medical interpretation of findings",
+    "analysis": "Professional medical interpretation of findings based on user query and tool execution results",
     "visualization_available": true/false,
     "visualization_base64": "base64_string_if_available",
   }
@@ -454,7 +451,7 @@ Based on tool execution results in image and user query, provide comprehensive a
                 synthesis_messages.append(
                     HumanMessage(
                         content=[
-                            {"type": "text", "text": f"Tool execution results:\n{json.dumps(other_results, indent=2)}\n\n{self._format_synthesis_input()}"},
+                            {"type": "text", "text": f"Use yolo and viz tool. Tool execution results:\n{json.dumps(other_results, indent=2)}\n\n{self._format_synthesis_input()}"},
                             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_base64}"}}
                         ]
                     )
@@ -462,9 +459,9 @@ Based on tool execution results in image and user query, provide comprehensive a
             else:
                 # Fallback về text-only message nếu không có visualization
                 synthesis_messages.append(
-                    HumanMessage(content=f"Tool execution results:\n{json.dumps(results, indent=2)}\n\n{self._format_synthesis_input()}")
+                    HumanMessage(content=f"Only use yolo tool with out visualization. Tool execution results:\n{json.dumps(results, indent=2)}\n\n{self._format_synthesis_input()}")
                 )
-            
+
             synthesis_response = self.llm.invoke(synthesis_messages)
             agent_result = self._extract_agent_result(synthesis_response.content)
             # Add visualization info if available

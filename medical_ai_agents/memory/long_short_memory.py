@@ -502,7 +502,7 @@ def launch_chatbot():
     
     interface.launch(
         server_name="0.0.0.0",
-        server_port=7860,
+        server_port=8000,
         share=True,
         debug=True,
         show_error=True

@@ -2,15 +2,17 @@
 # -*- coding: utf-8 -*-
 
 """
-FIXED: Medical AI Agents - VQA Agent
+Medical AI Agents - VQA Agent (MODIFIED for text-only support)
 ---------------------------
 Agent trả lời câu hỏi về hình ảnh với LLM controller và LLaVA tool.
 """
 
 import json
+import os
 from typing import Dict, Any, List
 import logging
 import re
+import base64
 
 from medical_ai_agents.agents.base_agent import BaseAgent
 from medical_ai_agents.tools.base_tools import BaseTool
@@ -18,7 +20,7 @@ from medical_ai_agents.tools.vqa.llava_tools import LLaVATool
 from langchain.schema import SystemMessage, HumanMessage
 
 class VQAAgent(BaseAgent):
-    """Agent trả lời câu hỏi về hình ảnh y tế sử dụng LLM controller."""
+    """Agent trả lời câu hỏi về hình ảnh y tế và câu hỏi text-only sử dụng LLM controller."""
     
     def __init__(self, model_path: str, llm_model: str = "gpt-4o-mini", device: str = "cuda"):
         """
@@ -43,10 +45,26 @@ class VQAAgent(BaseAgent):
     def _get_system_prompt(self) -> str:
         """Get the system prompt that defines this agent's role."""
         prompt = """
-Bạn là một AI chuyên gia y tế, nhiệm vụ của bạn là xác nhận lại kết quả trả lời từ công cụ llava_vqa dựa trên hình ảnh nội soi tiêu hóa và câu hỏi y tế.
-Bạn chỉ sử dụng công cụ sau:
-llava_vqa: Công cụ trả lời câu hỏi dựa trên hình ảnh sử dụng mô hình LLaVA
-   - Tham số: image_path (str), question (str), medical_context (Dict, optional)
+Bạn là một AI chuyên gia y tế với khả năng chuyên sâu về y tế và bạn có khả năng:
+1. Trả lời câu hỏi dựa trên hình ảnh nội soi tiêu hóa (sử dụng công cụ llava_vqa)
+2. Tư vấn y tế chuyên khoa dựa trên input (sử dụng kiến thức chuyên môn của bạn)
+
+Công cụ có sẵn:
+- llava_vqa: Công cụ trả lời câu hỏi dựa trên hình ảnh sử dụng mô hình LLaVA
+  - Tham số: image_path (str), question (str), medical_context (Dict, optional)
+  - CHỈ sử dụng khi có hình ảnh
+
+Quy trình làm việc:
+1. Kiểm tra xem có hình ảnh không
+2. Nếu có hình ảnh: sử dụng công cụ llava_vqa
+3. Nếu không có hình ảnh: dựa vào kiến thức y khoa chuyên môn để trả lời trực tiếp
+4. Tổng hợp và đưa ra câu trả lời cuối cùng
+
+Khi trả lời câu hỏi text-only, hãy:
+- Sử dụng kiến thức y khoa chuyên sâu
+- Đưa ra lời khuyên phù hợp với vai trò bác sĩ chuyên khoa
+- Khuyến nghị khám trực tiếp khi cần thiết
+- Không chẩn đoán chính xác 100% qua text
 """
         return prompt
 
@@ -100,7 +118,8 @@ llava_vqa: Công cụ trả lời câu hỏi dựa trên hình ảnh sử dụng
         return {
             "image_path": state.get("image_path", ""),
             "query": state.get("query", ""),
-            "medical_context": medical_context
+            "medical_context": medical_context,
+            "is_text_only": state.get("is_text_only", False)
         }
     
     def _format_task_input(self, task_input: Dict[str, Any]) -> str:
@@ -108,44 +127,66 @@ llava_vqa: Công cụ trả lời câu hỏi dựa trên hình ảnh sử dụng
         image_path = task_input.get("image_path", "")
         query = task_input.get("query", "")
         context = task_input.get("medical_context", {})
+        is_text_only = task_input.get("is_text_only", False)
         
         context_str = "\n".join([f"- {k}: {v}" for k, v in context.items()]) if context else "None"
         
-        return f"""Hình ảnh cần phân tích: {image_path}
+        # MODIFIED: Handle text-only mode
+        if is_text_only or not image_path or not os.path.exists(image_path):
+            return f"""Đây là câu hỏi y tế TEXT-ONLY (không có hình ảnh):
+
+Câu hỏi: {query}
+
+Thông tin y tế bổ sung:
+{context_str}
+
+Hãy trả lời câu hỏi này dựa trên kiến thức y khoa chuyên môn của bạn.
+KHÔNG sử dụng công cụ llava_vqa vì không có hình ảnh.
+Trả lời trực tiếp như một bác sĩ chuyên khoa giàu kinh nghiệm.
+"""
+        else:
+            return f"""Hình ảnh cần phân tích: {image_path}
                 
-        Câu hỏi: {query if query else "Mô tả những gì bạn thấy trong hình ảnh này"}
+Câu hỏi: {query if query else "Mô tả những gì bạn thấy trong hình ảnh này"}
 
-        Thông tin y tế bổ sung:
-        {context_str}
+Thông tin y tế bổ sung:
+{context_str}
 
-        Hãy sử dụng công cụ llava_vqa để trả lời câu hỏi này dựa trên hình ảnh.
-        Trả lời theo định dạng sau:
+Hãy sử dụng công cụ llava_vqa để trả lời câu hỏi này dựa trên hình ảnh.
+Trả lời theo định dạng sau:
 
-        Tool: llava_vqa
-        Parameters: {{"image_path": "{image_path}", "question": "{query if query else 'Mô tả những gì bạn thấy trong hình ảnh này'}", "medical_context": {json.dumps(context)}}}
-        """
+Tool: llava_vqa
+Parameters: {{"image_path": "{image_path}", "question": "{query if query else 'Mô tả những gì bạn thấy trong hình ảnh này'}", "medical_context": {json.dumps(context)}}}
+"""
     
     def _format_synthesis_input(self) -> str:
         return """
-        Dựa trên kết quả từ tools, bạn phải xác định:
-        - Mô tả lại kết quả từ vqa với lối hành văn rõ ràng, dễ hiểu với người dùng
-        - Dựa vào input và kết quả từ tools để xác định trả lời câu hỏi 1 cách chuẩn nhất
-        - Nếu không phát hiện polyp, hãy xác nhận điều đó và giải thích lý do có thể, kèm theo các thông tin khác nếu có
-        Trả lời theo định dạng sau:
-        ```json
-        {
-            "vqa_result": {
-                "success": true/false,
-                "answer": "câu trả lời chi tiết từ tools llava_vqa",
-                "analysis": "câu trả lời cuối cùng của bạn dựa trên kết quả từ tools và cont"
-            }
-        }
-        ```
-        """
+Dựa trên kết quả từ tools hoặc kiến thức y khoa của bạn, hãy tổng hợp:
+- Câu trả lời chi tiết và chuyên môn
+- Phân tích dựa trên thông tin có sẵn
+- Khuyến nghị y tế phù hợp
+- Lời khuyên về các bước tiếp theo nếu cần
+
+Trả lời theo định dạng sau:
+```json
+{
+    "vqa_result": {
+        "success": true/false,
+        "answer": "câu trả lời chi tiết từ tools hoặc kiến thức chuyên môn",
+        "analysis": "phân tích tổng hợp cuối cùng"
+    }
+}
+```
+"""
     
     def _parse_tool_calls(self, plan: str) -> List[Dict[str, Any]]:
-        """Enhanced parsing for VQA agent - handle both formats."""
+        """Enhanced parsing for VQA agent - handle text-only mode."""
         tool_calls = []
+        
+        # Check if this is text-only mode (no tool calls expected)
+        if "KHÔNG sử dụng công cụ" in plan or "không có hình ảnh" in plan:
+            self.logger.info("[VQA] Text-only mode detected, no tool calls needed")
+            return []  # No tool calls for text-only
         
         # Method 1: Standard format parsing
         lines = plan.split("\n")
@@ -200,33 +241,6 @@ llava_vqa: Công cụ trả lời câu hỏi dựa trên hình ảnh sử dụng
                 except Exception as e:
                     self.logger.warning(f"Failed to parse regex match: {match}, error: {e}")
         
-        # Method 3: Fallback - if still no tools, create default call
-        if not tool_calls:
-            self.logger.warning("No tool calls parsed, creating default llava_vqa call")
-            # Extract image_path and question from the plan
-            image_path = ""
-            question = ""
-            
-            # Try to extract from the plan text
-            image_matches = re.findall(r'image_path["\s]*:["\s]*([^"]+)', plan)
-            if image_matches:
-                image_path = image_matches[0]
-            
-            question_matches = re.findall(r'question["\s]*:["\s]*([^"]+)', plan)
-            if question_matches:
-                question = question_matches[0]
-            
-            # If we found both, create the tool call
-            if image_path and question:
-                tool_calls.append({
-                    "tool_name": "llava_vqa",
-                    "params": {
-                        "image_path": image_path,
-                        "question": question,
-                        "medical_context": {}
-                    }
-                })
-        
         self.logger.info(f"[VQA] Parsed {len(tool_calls)} tool calls")
         return tool_calls
     
@@ -243,7 +257,7 @@ llava_vqa: Công cụ trả lời câu hỏi dựa trên hình ảnh sử dụng
                 self.logger.info(f"[VQA] Successfully extracted JSON result")
                 return vqa_result
             
-            # If no JSON found, look for key information in text
+            # If no JSON found, create result from synthesis text
             self.logger.warning("[VQA] No JSON found in synthesis, parsing text")
             
             # Try to extract answer from text
@@ -259,15 +273,17 @@ llava_vqa: Công cụ trả lời câu hỏi dựa trên hình ảnh sử dụng
                 if matches:
                     answer = matches[0].strip()
                     break
+            
             # If still no answer found, use the whole synthesis as answer
             if not answer:
                 answer = synthesis
+                
             # Fallback: Create result from synthesis text
             return {
                 "vqa_result": {
                     "success": True,
                     "answer": answer,
-                    "analysis": "Generated from LLM synthesis parsing"
+                    "analysis": "Generated from LLM synthesis (text-only or parsing fallback)"
                 }
             }
         except Exception as e:
@@ -280,50 +296,85 @@ llava_vqa: Công cụ trả lời câu hỏi dựa trên hình ảnh sử dụng
                 }
             }
 
-    # def _process_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
-    #     """Process state using LLM controller and tools."""
-    #     # Extract relevant information from state
-    #     task_input = self._extract_task_input(state)
-    #     self.logger.info(f"[VQA] Task input: {json.dumps(task_input, indent=2)}")
+    def _process_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Process state using LLM controller and tools."""
+        # Extract relevant information from state
+        task_input = self._extract_task_input(state)
+        self.logger.info(f"[VQA] Task input: {json.dumps(task_input, indent=2)}")
         
-    #     # Let LLM decide which tools to use and how
-    #     messages = [
-    #         SystemMessage(content=self.system_prompt),
-    #         HumanMessage(content=self._format_task_input(task_input))
-    #     ]
+        # Let LLM decide which tools to use and how
+        messages = [
+            SystemMessage(content=self.system_prompt),
+            HumanMessage(content=self._format_task_input(task_input))
+        ]
         
-    #     # Get response from LLM
-    #     response = self.llm.invoke(messages)
-    #     plan = response.content
-    #     self.logger.info(f"[VQA] LLM plan: {plan}")
+        # Get response from LLM
+        response = self.llm.invoke(messages)
+        plan = response.content
+        self.logger.info(f"[VQA] LLM plan: {plan}")
         
-    #     # Parse the plan and execute tools
-    #     tool_calls = self._parse_tool_calls(plan)
-    #     self.logger.info(f"[VQA] Parsed tool calls: {json.dumps(tool_calls, indent=2)}")
+        # Parse the plan and execute tools
+        tool_calls = self._parse_tool_calls(plan)
+        self.logger.info(f"[VQA] Parsed tool calls: {json.dumps(tool_calls, indent=2)}")
         
-    #     results = {}
-    #     tool_outputs = {}
+        results = {}
+        tool_outputs = {}
         
-    #     for tool_call in tool_calls:
-    #         tool_name = tool_call.get("tool_name")
-    #         params = tool_call.get("params", {})
+        for tool_call in tool_calls:
+            tool_name = tool_call.get("tool_name")
+            params = tool_call.get("params", {})
             
-    #         if tool_name:
-    #             self.logger.info(f"[VQA] Processing tool call: {tool_name}")
-    #             self.logger.info(f"[VQA] Initial parameters: {json.dumps(params, indent=2)}")
+            if tool_name:
+                self.logger.info(f"[VQA] Processing tool call: {tool_name}")
+                self.logger.info(f"[VQA] Initial parameters: {json.dumps(params, indent=2)}")
                 
-    #             # Execute the tool
-    #             tool_result = self.execute_tool(tool_name, **params)
-    #             results[tool_name] = tool_result
-    #             tool_outputs[tool_name] = tool_result
-    #             self.logger.info(f"[VQA] Tool {tool_name} completed with result: {json.dumps(tool_result, indent=2)}")
+                # Execute the tool
+                tool_result = self.execute_tool(tool_name, **params)
+                results[tool_name] = tool_result
+                tool_outputs[tool_name] = tool_result
+                self.logger.info(f"[VQA] Tool {tool_name} completed with result: {json.dumps(tool_result, indent=2)}")
         
-    #     # Let LLM synthesize final result
-    #     messages.append(HumanMessage(content=f"Tool results: {json.dumps(results, indent=2)}\n\nPlease synthesize a final result in the required JSON format."))
-    #     synthesis_response = self.llm.invoke(messages)
-    #     self.logger.info(f"[VQA] Synthesis response: {synthesis_response.content}")
+        # Let LLM synthesize final result with actual image
+        image_path = task_input.get("image_path", "")
+        synthesis_text = f"""Tool results: {json.dumps(results, indent=2)}
+
+Original task input:
+Query: {task_input.get('query', '')}
+Medical context: {json.dumps(task_input.get('medical_context', {}), indent=2)}
+
+{self._format_synthesis_input()}
+"""
         
-    #     # Return agent result
-    #     agent_result = self._extract_agent_result(synthesis_response.content)
-    #     self.logger.info(f"[VQA] Final agent result: {json.dumps(agent_result, indent=2)}")
-    #     return {**state, **agent_result}
+        # Create the synthesis message with image using base64 encoding
+        img_base64 = None
+        if image_path and os.path.exists(image_path):
+            try:
+                # Convert image to base64
+                with open(image_path, "rb") as img_file:
+                    img_bytes = img_file.read()
+                    img_base64 = base64.b64encode(img_bytes).decode('utf-8')
+                
+                # Create message with both text and base64-encoded image
+                content = [
+                    {"type": "text", "text": synthesis_text},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_base64}"}}
+                ]
+                
+                # Add the message with image to messages
+                messages.append(HumanMessage(content=content))
+                self.logger.info(f"[VQA] Including base64 image in synthesis prompt")
+            except Exception as e:
+                self.logger.error(f"[VQA] Failed to encode image for synthesis: {str(e)}")
+                messages.append(HumanMessage(content=synthesis_text))
+        else:
+            self.logger.warning(f"[VQA] Image path not found or invalid: {image_path}")
+            messages.append(HumanMessage(content=synthesis_text))
+            
+        # Invoke LLM for synthesis
+        synthesis_response = self.llm.invoke(messages)
+        self.logger.info(f"[VQA] Synthesis response: {synthesis_response.content}")
+        
+        # Return agent result
+        agent_result = self._extract_agent_result(synthesis_response.content)
+        self.logger.info(f"[VQA] Final agent result: {json.dumps(agent_result, indent=2)}")
+        return {**state, **agent_result}

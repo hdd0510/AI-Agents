@@ -35,7 +35,7 @@ class MedicalAIConfig:
             "title": "Medical AI Assistant",
             "description": "Hệ thống AI hỗ trợ phân tích hình ảnh nội soi",
             "host": "0.0.0.0",
-            "port": 7860,
+            "port": 8000,
             "share": True,
             "debug": False
         },
@@ -545,7 +545,7 @@ def main():
     parser = argparse.ArgumentParser(description="Medical AI Chatbot Launcher")
     parser.add_argument("--config", default="config.json", help="Path to config file")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind")
-    parser.add_argument("--port", type=int, default=7860, help="Port to bind")
+    parser.add_argument("--port", type=int, default=8000, help="Port to bind")
     parser.add_argument("--share", action="store_true", help="Create shareable link")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     parser.add_argument("--device", choices=["cuda", "cpu"], help="Device to use")

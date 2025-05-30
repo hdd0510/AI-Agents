@@ -2,24 +2,38 @@
 # -*- coding: utf-8 -*-
 
 """
-Medical AI Graph - Routers
+Medical AI Graph - Routers (MODIFIED for text-only support)
 -----------------------
 Các hàm router để điều hướng luồng dữ liệu trong LangGraph.
 """
 
 import logging
+import os
 from typing import Dict, Any, List
 
 from medical_ai_agents.config import SystemState, TaskType
 
 # Router to determine next step based on task type
 def task_router(state: SystemState) -> str:
-    """Routes to the next step based on task type."""
+    """Routes to the next step based on task type and input type."""
     logger = logging.getLogger("graph.routers.task_router")
     task_type = state.get("task_type", TaskType.COMPREHENSIVE)
+    image_path = state.get("image_path", "")
+    query = state.get("query", "")
+    is_text_only = state.get("is_text_only", False)
     
-    logger.info(f"Routing based on task type: {task_type}")
+    logger.info(f"Routing - Task: {task_type}, Has Image: {bool(image_path and os.path.exists(image_path))}, Is Text Only: {is_text_only}")
     
+    # MODIFIED: Handle text-only mode
+    if is_text_only or not image_path or not os.path.exists(image_path):
+        if query and query.strip():
+            logger.info("Text-only mode detected, routing to VQA for text-based medical consultation")
+            return "vqa"  # Route directly to VQA for text-only queries
+        else:
+            logger.warning("No valid input provided")
+            return "synthesizer"  # Go to synthesizer to handle error
+    
+    # Original logic for image-based analysis
     if task_type == TaskType.POLYP_DETECTION:
         return "detector"
     elif task_type == TaskType.MODALITY_CLASSIFICATION:
@@ -27,14 +41,14 @@ def task_router(state: SystemState) -> str:
     elif task_type == TaskType.REGION_CLASSIFICATION:
         return "region_classifier"
     elif task_type == TaskType.MEDICAL_QA:
-        # For medical QA, start with detector for context
-        return "detector"
+        return "detector"  # Start with detector for context
     else:  # COMPREHENSIVE
         return "detector"
 
 
 # Router after detection
 def post_detector_router(state: SystemState) -> str:
+    """Routes after detection based on task type and query."""
     task_type = state.get("task_type", TaskType.COMPREHENSIVE)
     query = state.get("query", "")
     
@@ -60,7 +74,6 @@ def post_modality_router(state: SystemState) -> str:
     elif task_type == TaskType.COMPREHENSIVE:
         return "region_classifier"
     else:
-        # Should not happen, but just in case
         return "synthesizer"
 
 
