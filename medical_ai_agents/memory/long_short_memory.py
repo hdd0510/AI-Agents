@@ -270,6 +270,38 @@ class MedicalAIChatbot:
                             response_parts.append(f"\n📊 **Chi tiết phát hiện:**")
                             response_parts.append(f"- Số lượng polyp: {detector['count']}")
                             response_parts.append(f"- Độ tin cậy: {detector['objects'][0]['confidence']:.2%}")
+                            
+                            # Thêm ảnh visualization nếu có
+                            if detector.get("visualization_base64") and detector.get("visualization_available"):
+                                # Lưu base64 vào session_state để sử dụng sau
+                                session_state["last_visualization"] = detector.get("visualization_base64")
+                                
+                                # Tạo ảnh từ base64 và lưu vào file tạm
+                                import base64
+                                import tempfile
+                                import os
+                                
+                                temp_dir = tempfile.gettempdir()
+                                temp_file = os.path.join(temp_dir, f"viz_{session_id}.png")
+                                
+                                try:
+                                    img_data = base64.b64decode(detector.get("visualization_base64"))
+                                    with open(temp_file, "wb") as f:
+                                        f.write(img_data)
+                                    
+                                    # Lưu đường dẫn ảnh visualization vào session_state
+                                    session_state["viz_image_path"] = temp_file
+                                    
+                                    # Thêm ảnh với format markdown để hiển thị trực tiếp trong chat
+                                    response_parts.append(f"\n\n📊 **Kết quả phát hiện polyp:**")
+                                    response_parts.append(f"![Kết quả phát hiện polyp]({temp_file})")
+                                    
+                                    # Thêm ảnh trực tiếp vào chat history
+                                    session_state["has_image_result"] = True
+                                    session_state["last_result_image"] = temp_file
+                                except Exception as e:
+                                    logger.error(f"Error creating visualization image: {str(e)}")
+                                    response_parts.append("\n⚠️ *Không thể hiển thị ảnh kết quả*")
                     
                     # Add medical recommendations
                     response_parts.append("\n💡 **Khuyến nghị:**")

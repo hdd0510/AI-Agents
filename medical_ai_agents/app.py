@@ -174,6 +174,16 @@ def create_enhanced_chatbot():
                 border-radius: 10px;
                 box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
             }
+            /* Cải thiện hiển thị ảnh trong chat */
+            .chat-container img {
+                max-width: 80%;
+                max-height: 400px;
+                border-radius: 8px;
+                margin: 10px auto;
+                display: block;
+                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+                border: 1px solid rgba(0, 0, 0, 0.1);
+            }
             .upload-container { 
                 border: 2px dashed #4CAF50; 
                 padding: 20px; 
@@ -230,31 +240,45 @@ def create_enhanced_chatbot():
                             height=self.app_config.get("ui.chat_height", 500),
                             show_copy_button=True,
                             elem_classes=["chat-container"],
+                            layout="bubble",
+                            render_markdown=True,
                         )
                         
                         with gr.Row():
                             msg_input = gr.Textbox(
                                 placeholder="💭 Hãy mô tả triệu chứng hoặc đặt câu hỏi về hình ảnh...",
-                                label="Tin nhắn của bạn",
+                                label="Tin nhắc của bạn",
                                 scale=5,
                                 lines=2
                             )
                             send_btn = gr.Button("📤 Gửi", variant="primary", scale=1)
                         
-                        # Advanced image upload
-                        with gr.Accordion("🖼️ Tải lên hình ảnh y tế", open=True):
-                            image_input = gr.Image(
-                                label="Chọn hình ảnh nội soi, X-quang hoặc hình ảnh y tế khác",
-                                type="filepath",
-                                elem_classes=["upload-container"]
-                            )
+                        # Add visualization display area
+                        tabs = gr.Tabs()
+                        with tabs:
+                            with gr.TabItem("🖼️ Tải ảnh"):
+                                # Advanced image upload
+                                image_input = gr.Image(
+                                    label="Chọn hình ảnh nội soi, X-quang hoặc hình ảnh y tế khác",
+                                    type="filepath",
+                                    elem_classes=["upload-container"]
+                                )
+                                
+                                gr.Markdown("""
+                                **Lưu ý:** 
+                                - Hỗ trợ định dạng: JPG, PNG, DICOM
+                                - Kích thước tối đa: 10MB
+                                - Đảm bảo hình ảnh rõ nét cho kết quả tốt nhất
+                                """)
                             
-                            gr.Markdown("""
-                            **Lưu ý:** 
-                            - Hỗ trợ định dạng: JPG, PNG, DICOM
-                            - Kích thước tối đa: 10MB
-                            - Đảm bảo hình ảnh rõ nét cho kết quả tốt nhất
-                            """)
+                            with gr.TabItem("📊 Kết quả phát hiện"):
+                                result_image = gr.Image(
+                                    label="Kết quả phát hiện polyp",
+                                    type="filepath",
+                                    interactive=False
+                                )
+                                
+                                show_latest_result_btn = gr.Button("🔄 Hiển thị kết quả mới nhất", variant="secondary")
                     
                     with gr.Column(scale=1):
                         # User panel
@@ -317,11 +341,34 @@ def create_enhanced_chatbot():
                                 state["medical_context"] = {}
                             state["medical_context"]["user_info"] = user_info
                         
-                        return self.process_message(message, image, history, username, state)
+                        msg, history, updated_state = self.process_message(message, image, history, username, state)
+                        
+                        # Nếu có hình ảnh kết quả mới, lưu trạng thái và hiển thị lên result_image
+                        if "viz_image_path" in updated_state and updated_state["viz_image_path"]:
+                            return msg, history, updated_state, updated_state["viz_image_path"]
+                        else:
+                            return msg, history, updated_state, None
                     except Exception as e:
                         error_msg = f"❌ Lỗi xử lý: {str(e)}"
                         history.append([message, error_msg])
-                        return "", history, state
+                        return "", history, state, None
+                
+                # Hàm để chuyển tab khi có kết quả mới
+                def switch_to_results_tab(state):
+                    if "viz_image_path" in state and state["viz_image_path"]:
+                        # Chuyển sang tab kết quả
+                        return 1  # Index của tab kết quả
+                    return 0  # Giữ nguyên tab hiện tại
+                
+                def show_latest_visualization(state):
+                    """Hiển thị kết quả phát hiện mới nhất từ session state"""
+                    try:
+                        if "viz_image_path" in state and state["viz_image_path"]:
+                            return state["viz_image_path"]
+                        else:
+                            return None
+                    except Exception as e:
+                        return None
                 
                 def safe_update_stats(username):
                     try:
@@ -358,13 +405,30 @@ def create_enhanced_chatbot():
                 send_btn.click(
                     safe_process_message,
                     inputs=[msg_input, image_input, chatbot, username_input, user_info, session_state],
-                    outputs=[msg_input, chatbot, session_state]
+                    outputs=[msg_input, chatbot, session_state, result_image]
+                ).then(
+                    lambda state: gr.update(selected=1) if "viz_image_path" in state and state["viz_image_path"] else gr.update(),
+                    inputs=[session_state],
+                    outputs=[tabs]
                 )
                 
                 msg_input.submit(
                     safe_process_message,
                     inputs=[msg_input, image_input, chatbot, username_input, user_info, session_state],
-                    outputs=[msg_input, chatbot, session_state]
+                    outputs=[msg_input, chatbot, session_state, result_image]
+                ).then(
+                    lambda state: gr.update(selected=1) if "viz_image_path" in state and state["viz_image_path"] else gr.update(),
+                    inputs=[session_state],
+                    outputs=[tabs]
+                )
+                
+                show_latest_result_btn.click(
+                    show_latest_visualization,
+                    inputs=[session_state],
+                    outputs=[result_image]
+                ).then(
+                    lambda: gr.update(selected=1),  # Luôn chuyển sang tab kết quả
+                    outputs=[tabs]
                 )
                 
                 stats_btn.click(

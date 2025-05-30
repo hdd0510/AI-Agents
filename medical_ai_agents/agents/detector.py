@@ -12,7 +12,6 @@ from typing import Dict, Any, List
 import logging
 import re
 import time
-import os
 
 from langchain.schema import HumanMessage, SystemMessage
 
@@ -384,40 +383,8 @@ Based on tool execution results, provide comprehensive analysis:
             # Get LLM reasoning and tool plan
             messages = [
                 SystemMessage(content=self.system_prompt),
+                HumanMessage(content=self._format_task_input(task_input))
             ]
-            
-            # Check if image path exists and can be loaded as base64
-            image_path = task_input.get("image_path", "")
-            image_base64 = None
-            
-            if image_path and os.path.exists(image_path):
-                try:
-                    image = self.load_image(image_path)
-                    if image:
-                        import base64
-                        from io import BytesIO
-                        
-                        buffered = BytesIO()
-                        image.save(buffered, format="PNG")
-                        image_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
-                except Exception as e:
-                    self.logger.warning(f"[Smart Detector] Failed to encode input image: {str(e)}")
-            
-            # Create multipart message with text and image if available
-            if image_base64:
-                messages.append(
-                    HumanMessage(
-                        content=[
-                            {"type": "text", "text": self._format_task_input(task_input)},
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}}
-                        ]
-                    )
-                )
-            else:
-                # Fallback to text-only message
-                messages.append(
-                    HumanMessage(content=self._format_task_input(task_input))
-                )
             
             response = self.llm.invoke(messages)
             plan = response.content
@@ -463,39 +430,46 @@ Based on tool execution results, provide comprehensive analysis:
                 self.logger.info(f"[Smart Detector] Tool {tool_name} completed: {tool_result.get('success', False)}")
             
             # Synthesize results
+            # Tách kết quả visualization khỏi các kết quả khác
+            viz_results = {}
+            other_results = {}
+            img_base64 = None
+            
+            for tool_name, result in results.items():
+                if tool_name == "visualize_detections" and result.get("success"):
+                    viz_results[tool_name] = {
+                        "success": result["success"],
+                        "count": result.get("count", 0)
+                    }
+                    # Lưu base64 image riêng để đưa vào multipart message
+                    img_base64 = result.get("visualization_base64")
+                else:
+                    other_results[tool_name] = result
+            
             synthesis_messages = [
                 SystemMessage(content=self.system_prompt),
             ]
             
-            # Check if visualization is available to include in message
-            visualization_available = False
-            img_str = None
-            
-            if "visualize_detections" in tool_outputs:
-                viz_result = tool_outputs["visualize_detections"]
-                if viz_result.get("success"):
-                    visualization_available = True
-                    img_str = viz_result.get("visualization_base64")
-            
-            # Create multipart message with text and image if available
-            if visualization_available and img_str:
+            # Tạo multipart message với text và image nếu có visualization
+            if img_base64:
                 synthesis_messages.append(
                     HumanMessage(
                         content=[
-                            {"type": "text", "text": f"Tool execution results:\n{json.dumps(results, indent=2)}\n\n{self._format_synthesis_input()}"},
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_str}"}}
+                            {"type": "text", "text": f"Tool execution results:\n{json.dumps(other_results, indent=2)}\n\n{self._format_synthesis_input()}"},
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_base64}"}}
                         ]
                     )
                 )
             else:
-                # Fallback to text-only message
+                # Fallback về text-only message nếu không có visualization
                 synthesis_messages.append(
                     HumanMessage(content=f"Tool execution results:\n{json.dumps(results, indent=2)}\n\n{self._format_synthesis_input()}")
                 )
             
             synthesis_response = self.llm.invoke(synthesis_messages)
             agent_result = self._extract_agent_result(synthesis_response.content)
-            
+            print("agent_result")
+            print(agent_result)
             # Add visualization info if available
             if "visualize_detections" in tool_outputs:
                 viz_result = tool_outputs["visualize_detections"]
