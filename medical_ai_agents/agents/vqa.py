@@ -43,48 +43,57 @@ class VQAAgent(BaseAgent):
         return [self.llava_tool]
     
     def _get_system_prompt(self) -> str:
-        """Get the system prompt that defines this agent's role."""
-        prompt = """
-Bạn là một AI chuyên gia y tế với khả năng sử dụng LLaVA (Large Language and Vision Assistant) để:
+        """Get the enhanced system prompt for VQA Agent."""
+        return """
+You are an advanced AI assistant with dual capabilities:
 
-1. **Phân tích hình ảnh y tế** khi có hình ảnh
-2. **Tư vấn y tế chuyên sâu** khi chỉ có text (text-only)
+1. **Medical Visual Question Answering**: When images are provided, you use LLaVA to analyze medical images (endoscopy, X-rays, CT, MRI) with expert precision.
 
-**Công cụ chính:**
-- `llava_vqa`: Công cụ LLaVA có thể xử lý:
-  - **Image + Text**: Phân tích hình ảnh nội soi, X-quang, CT, MRI...
-  - **Text Only**: Tư vấn y tế dựa trên kiến thức chuyên môn của LLaVA
+2. **Intelligent Conversational AI**: For text-only queries, you adapt your expertise based on the question:
+   - **Medical consultations**: Provide professional medical advice as a gastroenterology specialist
+   - **General conversations**: Respond naturally as a helpful AI assistant
+   - **Identity questions**: Explain your capabilities clearly and friendly
+   - **Casual chat**: Engage warmly while gently guiding users to your medical expertise
 
-**Quy trình làm việc - LUÔN SỬ DỤNG LLAVA:**
+**Your Core Tool:**
+- `llava_vqa`: A versatile tool that handles both image analysis and text consultations
+  - Automatically detects query type and adapts response style
+  - Maintains context awareness across conversation types
 
-1. **Xác định loại query:**
-   - Có hình ảnh: Phân tích image + answer question
-   - Chỉ text: Medical consultation using LLaVA's knowledge
+**Adaptive Response Framework:**
 
-2. **Sử dụng LLaVA tool:**
+1. **Query Analysis Phase:**
+   - Determine if query is medical, general, or conversational
+   - Check for image presence
+   - Assess required expertise level
+
+2. **Tool Usage Strategy:**
    ```
    Tool: llava_vqa
    Parameters: {"query": "user's question", "image_path": "path/to/image.jpg" (nếu có) hoặc null (nếu text-only), "medical_context": {context_from_other_agents}}
    ```
+   
+3. **Response Calibration:**
+   - Medical queries → Professional yet accessible medical consultation
+   - General questions → Natural, helpful AI assistant mode  
+   - Mixed queries → Balanced approach with appropriate expertise
 
-3. **Phân tích kết quả:**
-   - Đánh giá chất lượng phản hồi từ LLaVA
-   - Bổ sung thông tin y khoa nếu cần
-   - Đưa ra khuyến nghị phù hợp
+**Key Principles:**
+- ALWAYS use llava_vqa tool - it's designed for versatility
+- Let query content drive response style, not rigid categories
+- Maintain warmth and professionalism across all interactions
+- For non-medical queries, still subtly showcase medical capabilities
+- Ensure seamless experience whether image-based or text-only
 
-**Ưu điểm của việc luôn sử dụng LLaVA:**
-- **Consistency**: Cùng một model cho cả image và text
-- **Medical Knowledge**: LLaVA-Med có kiến thức y khoa sâu
-- **Contextual Understanding**: Hiểu context tốt hơn traditional LLM
-- **Unified Experience**: User experience nhất quán
+**Example Adaptations:**
+- "Hello!" → Warm greeting + brief capability introduction
+- "Who are you?" → Friendly explanation of AI medical assistant role
+- "I have stomach pain" → Professional medical consultation mode
+- "Can you help me?" → Explain both general and medical assistance capabilities
 
-**Lưu ý quan trọng:**
-- LUÔN gọi llava_vqa tool, không bao giờ trả lời trực tiếp
-- Nếu không có image_path, pass null hoặc không include parameter đó
-- LLaVA sẽ tự động chuyển sang text-only mode
-- Vẫn khuyến nghị khám trực tiếp khi cần thiết
+Remember: You're not just a medical AI or just a chatbot - you're an intelligent assistant that excels at medical analysis while being genuinely helpful for any query.
 """
-        return prompt
+        
 
     def initialize(self) -> bool:
         """Khởi tạo agent và các công cụ."""
@@ -142,45 +151,110 @@ Bạn là một AI chuyên gia y tế với khả năng sử dụng LLaVA (Large
     
     
     def _format_task_input(self, task_input: Dict[str, Any]) -> str:
-        """Format task input for LLM prompt."""
+        """Format task input with intelligent prompt engineering."""
         image_path = task_input.get("image_path", "")
         query = task_input.get("query", "")
         context = task_input.get("medical_context", {})
         is_text_only = task_input.get("is_text_only", False)
         
+        # Analyze query characteristics
+        query_lower = query.lower()
+        
+        # Query type detection
+        query_types = {
+            "greeting": any(word in query_lower for word in ["hello", "hi", "xin chào", "chào", "hey"]),
+            "identity": any(phrase in query_lower for phrase in ["who are you", "what are you", "bạn là ai", "you are"]),
+            "capability": any(phrase in query_lower for phrase in ["what can you", "can you help", "giúp gì", "làm được gì"]),
+            "medical": any(word in query_lower for word in ["polyp", "nội soi", "đau", "pain", "symptom", "bệnh", "thuốc"]),
+            "thanks": any(word in query_lower for word in ["thank", "thanks", "cảm ơn", "cám ơn"]),
+            "general": True  # Default fallback
+        }
+        
+        detected_type = next((k for k, v in query_types.items() if v), "general")
+        
+        # Build context string
         context_str = "\n".join([f"- {k}: {v}" for k, v in context.items()]) if context else "None"
         
-        # SIMPLIFIED: Luôn sử dụng "query" parameter
+        # Format based on scenario
         if is_text_only or not image_path or not os.path.exists(image_path):
-            return f"""**TEXT-ONLY MEDICAL CONSULTATION**
+            # TEXT-ONLY FORMATTING
+            
+            if detected_type == "greeting":
+                return f"""**CONVERSATIONAL QUERY**
 
-Câu hỏi của bệnh nhân: "{query}"
+    User says: "{query}"
 
-Thông tin y tế bổ sung:
-{context_str}
+    Context:
+    {context_str}
 
-Hãy sử dụng LLaVA tool để tư vấn y tế chuyên sâu (text-only mode):
+    Please use LLaVA tool to provide a warm, friendly response:
 
-Tool: llava_vqa
-Parameters: {{"query": "{query}", "medical_context": {json.dumps(context)}}}
+    Tool: llava_vqa
+    Parameters: {{"query": "Respond warmly to: {query}. Briefly mention you're a medical AI assistant specializing in endoscopy analysis, but keep it conversational and inviting."}}
+    """
+            
+            elif detected_type == "identity":
+                return f"""**IDENTITY QUERY**
 
-LLaVA sẽ tự động sử dụng kiến thức y khoa để tư vấn khi không có hình ảnh.
-"""
+    User asks: "{query}"
+
+    Context:
+    {context_str}
+
+    Use LLaVA tool to explain your identity and capabilities:
+
+    Tool: llava_vqa
+    Parameters: {{"query": "Explain that you are an AI medical assistant created to help with: 1) Analyzing endoscopy images for polyp detection, 2) Answering medical questions especially about gastroenterology, 3) Providing general health guidance. Keep it friendly and approachable. User asked: {query}"}}
+    """
+            
+            elif detected_type == "medical":
+                return f"""**MEDICAL CONSULTATION**
+
+    Patient question: "{query}"
+
+    Medical context:
+    {context_str}
+
+    Use LLaVA tool for professional medical consultation:
+
+    Tool: llava_vqa
+    Parameters: {{"query": "As a gastroenterology AI specialist, provide medical consultation for: {query}. Include: assessment, possible causes, recommendations, and when to seek immediate care. Be professional yet accessible.", "medical_context": {json.dumps(context)}}}
+    """
+            
+            else:  # general, capability, thanks
+                return f"""**GENERAL QUERY**
+
+    User: "{query}"
+
+    Context:
+    {context_str}
+
+    Use LLaVA tool adaptively:
+
+    Tool: llava_vqa
+    Parameters: {{"query": "{query}", "medical_context": {json.dumps(context)}}}
+
+    Note: LLaVA should detect query intent and respond appropriately - conversationally for general chat, professionally for medical topics.
+    """
+        
         else:
-            return f"""**IMAGE-BASED MEDICAL ANALYSIS**
+            # IMAGE-BASED FORMATTING
+            return f"""**MEDICAL IMAGE ANALYSIS**
 
-Hình ảnh cần phân tích: {image_path}
-Câu hỏi: "{query if query else 'Phân tích hình ảnh y tế này'}"
+    Image to analyze: {image_path}
+    User question: "{query if query else 'Please analyze this medical image'}"
 
-Thông tin y tế bổ sung:
-{context_str}
+    Medical context:
+    {context_str}
 
-Hãy sử dụng LLaVA tool để phân tích hình ảnh và trả lời câu hỏi:
+    Use LLaVA tool for comprehensive image analysis:
 
-Tool: llava_vqa
-Parameters: {{"query": "{query if query else 'Phân tích hình ảnh y tế này'}", "image_path": "{image_path}", "medical_context": {json.dumps(context)}}}
-"""
-    
+    Tool: llava_vqa
+    Parameters: {{"query": "{query if query else 'Analyze this endoscopy image for any abnormalities, particularly polyps. Provide detailed findings and clinical significance.'}", "image_path": "{image_path}", "medical_context": {json.dumps(context)}}}
+
+    Focus on: detection accuracy, clinical relevance, and actionable insights.
+    """
+        
     def _format_synthesis_input(self) -> str:
         return """
 **SYNTHESIS TASK: LLaVA Result Processing**

@@ -314,64 +314,152 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
 
 def _generate_final_answer(result: Dict[str, Any], llm: ChatOpenAI) -> str:
     """
-    Generate a comprehensive, user-friendly answer using LLM, synthesizing all agent results.
+    Generate a comprehensive, user-friendly answer using LLM with adaptive prompting.
     """
     logger = logging.getLogger("synthesizer")
     agent_results = result["agent_results"]
     query = result.get("query", "")
-
-    # Tổng hợp thông tin từ các agent nhỏ
+    task_type = result.get("task_type", "")
+    
+    # Analyze query type first
+    query_lower = query.lower()
+    is_greeting = any(word in query_lower for word in ["hello", "hi", "xin chào", "chào"])
+    is_identity = any(phrase in query_lower for phrase in ["who are you", "bạn là ai", "what are you", "you are"])
+    is_general_chat = any(phrase in query_lower for phrase in ["how are", "thank", "cảm ơn", "help me", "can you"])
+    is_medical = any(word in query_lower for word in ["polyp", "nội soi", "đau", "bệnh", "thuốc", "triệu chứng", "chẩn đoán"])
+    
+    # Prepare context from agents
     context_parts = []
+    has_detection = False
+    has_medical_analysis = False
+    
     if agent_results.get("detector_result", {}).get("success"):
+        has_detection = True
         count = agent_results["detector_result"].get("count", 0)
         if count > 0:
-            context_parts.append(f"Phát hiện {count} polyp.")
+            context_parts.append(f"Detection: Found {count} polyp(s)")
             objects = agent_results["detector_result"].get("objects", [])
             for i, obj in enumerate(objects[:3]):
                 conf = obj.get("confidence", 0)
-                pos = obj.get("position_description", "không xác định")
-                context_parts.append(f"- Polyp {i+1}: độ tin cậy {conf:.2%}, vị trí {pos}")
+                pos = obj.get("position_description", "unknown")
+                context_parts.append(f"- Polyp {i+1}: {conf:.2%} confidence, position {pos}")
         else:
-            context_parts.append("Không phát hiện polyp nào.")
+            context_parts.append("Detection: No polyps found")
+    
     if agent_results.get("modality_result", {}).get("success"):
-        context_parts.append(f"Kỹ thuật nội soi: {agent_results['modality_result'].get('class_name', 'không xác định')}")
+        context_parts.append(f"Imaging technique: {agent_results['modality_result'].get('class_name', 'unknown')}")
+        has_medical_analysis = True
+    
     if agent_results.get("region_result", {}).get("success"):
-        context_parts.append(f"Vùng giải phẫu: {agent_results['region_result'].get('class_name', 'không xác định')}")
+        context_parts.append(f"Anatomical region: {agent_results['region_result'].get('class_name', 'unknown')}")
+        has_medical_analysis = True
+    
     if agent_results.get("vqa_result", {}).get("success"):
-        context_parts.append(f"Phân tích hình ảnh (VQA): {agent_results['vqa_result'].get('answer', '')}")
-    if agent_results.get("rag_result", {}).get("success"):
-        context_parts.append(f"Kiến thức y khoa: {agent_results['rag_result'].get('answer', '')}")
-    if agent_results.get("reflection_result", {}).get("improved_answer"):
-        context_parts.append(f"Kiểm tra sai lệch: {agent_results['reflection_result'].get('improved_answer', '')}")
+        vqa_answer = agent_results["vqa_result"].get("answer", "")
+        if vqa_answer:
+            context_parts.append(f"VQA Analysis: {vqa_answer[:200]}...")
+            has_medical_analysis = True
+    
+    context_str = "\n".join(context_parts) if context_parts else "No specific analysis results"
+    
+    # Create adaptive prompt based on query type
+    if is_greeting or is_identity or is_general_chat:
+        # Conversational mode
+        prompt = f"""
+You are a friendly and professional Medical AI Assistant specializing in gastrointestinal endoscopy analysis. 
+Your personality is warm, helpful, and approachable while maintaining medical professionalism when needed.
 
-    context_str = "\n".join(context_parts)
+User query: "{query}"
 
-    # Prompt cho LLM
-    prompt = f"""
-Bạn là bác sĩ chuyên khoa tiêu hóa nhiều kinh nghiệm. Hãy trả lời bệnh nhân với giọng điệu chuyên nghiệp, dễ hiểu, tránh dùng thuật ngữ quá kỹ thuật. Không sử dụng các cụm như 'Chào bạn', 'Cảm ơn', không liệt kê rời rạc từng kết quả, mà hãy kết nối các thông tin lại thành một nhận định y khoa mạch lạc, logic, có kết luận và khuyến nghị rõ ràng. Hạn chế liệt kê, tập trung vào diễn giải tổng hợp và nhận định cuối cùng.
-
-Câu hỏi của bệnh nhân: {query}
-
-Kết quả phân tích từ hệ thống AI:
+Context from analysis (if any):
 {context_str}
 
-Yêu cầu:
-- Bạn chính là chủ thể của phần phân tích, hãy chủ động đưa ra nhận định và dựa trên các kết quả phân tích để trả lời câu hỏi của bệnh nhân.
-- Không liệt kê kết quả một cách quá thô mà hãy dùng lời văn để diễn giải kết quả (không đưa ra các con số như 80%,... của agents mà phải dùng ngôn từ diễn đạt).
-- Diễn giải kết quả một cách mạch lạc, kết nối các thông tin từ các nguồn khác nhau thành một nhận định y khoa cuối cùng.
-- Đưa ra kết luận rõ ràng về tình trạng của bệnh nhân dựa trên các kết quả.
-- Đưa ra khuyến nghị y khoa phù hợp, thực tế.
-- Tránh liệt kê rời rạc, hãy viết thành đoạn văn hoàn chỉnh, logic.
-- Không dùng các cụm chào hỏi, cảm ơn, hoặc lặp lại câu hỏi của bệnh nhân.
-"""
+Instructions:
+- If this is a greeting, respond warmly and briefly introduce your capabilities
+- If asked about your identity, explain you're an AI assistant for medical image analysis
+- For general questions, be conversational but guide back to how you can help with medical analysis
+- Keep responses natural, friendly, and concise
+- Don't use medical jargon unless specifically discussing medical topics
+- If relevant, mention what you can help with (endoscopy analysis, polyp detection, medical Q&A)
 
+Respond naturally in the same language as the user's query.
+"""
+    
+    elif is_medical or has_detection or has_medical_analysis:
+        # Medical mode - original prompt but enhanced
+        prompt = f"""
+You are an experienced gastroenterology specialist providing consultation through an AI system.
+Balance medical expertise with clear, accessible communication.
+
+Patient query: "{query}"
+
+Analysis results:
+{context_str}
+
+Guidelines:
+- Provide medically accurate information in patient-friendly language
+- Start directly with the relevant answer - no greetings or formalities
+- Integrate all analysis results into a cohesive medical assessment
+- Structure your response logically: findings → interpretation → recommendations
+- Use medical terms when necessary but always explain them
+- Be empathetic and reassuring while maintaining professionalism
+- Include appropriate disclaimers about AI limitations and need for in-person consultation
+- Avoid lists or bullet points - use flowing paragraphs
+- Keep the tone confident but not overly assertive
+
+Provide a comprehensive yet accessible medical response.
+"""
+    
+    else:
+        # Hybrid mode - could be either medical or general
+        prompt = f"""
+You are a Medical AI Assistant with expertise in gastrointestinal endoscopy and general medical knowledge.
+Adapt your response style based on the user's question.
+
+User query: "{query}"
+
+Available context:
+{context_str}
+
+Instructions:
+- Analyze if this is a medical question or general inquiry
+- For medical questions: provide professional, accurate medical information
+- For general questions: be conversational and helpful
+- Always maintain a warm, professional tone
+- If unsure about the query intent, offer both general assistance and medical capabilities
+- Keep responses natural and well-structured
+- Don't over-explain unless the question requires detail
+
+Respond appropriately to the user's needs.
+"""
+    
+    # Add text-only handling
+    if not has_detection and not has_medical_analysis and query:
+        prompt += """
+
+Note: This is a text-only consultation without image analysis. Base your response on:
+- Medical knowledge and best practices
+- The specific question asked
+- General medical guidelines
+- Always recommend proper medical examination when appropriate
+"""
+    
     try:
         response = llm.invoke([HumanMessage(content=prompt)])
-        return response.content.strip()
+        answer = response.content.strip()
+        
+        # Post-process to ensure quality
+        if len(answer) < 50 and not (is_greeting or is_general_chat):
+            # Too short for a medical response, try again with emphasis
+            retry_prompt = prompt + "\n\nPlease provide a more detailed and complete response."
+            response = llm.invoke([HumanMessage(content=retry_prompt)])
+            answer = response.content.strip()
+        
+        return answer
+        
     except Exception as e:
         logger.error(f"Failed to generate answer from LLM: {str(e)}")
         return _generate_fallback_answer(agent_results)
-
 
 def _generate_fallback_answer(agent_results: Dict[str, Any]) -> str:
     """Generate simple fallback answer."""
