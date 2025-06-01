@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 
 """
-Medical AI Graph - Routers (MODIFIED for text-only support)
+Medical AI Graph - Routers (FIXED: Proper Task-Based Logic)
 -----------------------
-Các hàm router để điều hướng luồng dữ liệu trong LangGraph.
+Các hàm router với logic routing được sửa chữa hợp lý.
 """
 
 import logging
@@ -13,7 +13,7 @@ from typing import Dict, Any, List
 
 from medical_ai_agents.config import SystemState, TaskType
 
-# Router to determine next step based on task type
+# ===== FIXED TASK ROUTER =====
 def task_router(state: SystemState) -> str:
     """Routes to the next step based on task type and input type."""
     logger = logging.getLogger("graph.routers.task_router")
@@ -24,44 +24,68 @@ def task_router(state: SystemState) -> str:
     
     logger.info(f"Routing - Task: {task_type}, Has Image: {bool(image_path and os.path.exists(image_path))}, Is Text Only: {is_text_only}")
     
-    # MODIFIED: Handle text-only mode
+    # Text-only queries always go to VQA (to use LLaVA)
     if is_text_only or not image_path or not os.path.exists(image_path):
         if query and query.strip():
-            logger.info("Text-only mode detected, routing to VQA for text-based medical consultation")
-            return "vqa"  # Route directly to VQA for text-only queries
+            logger.info("Text-only mode detected, routing to VQA for LLaVA-based consultation")
+            return "vqa"
         else:
             logger.warning("No valid input provided")
-            return "synthesizer"  # Go to synthesizer to handle error
+            return "synthesizer"
     
-    # Original logic for image-based analysis
+    # Image-based analysis - FIXED LOGIC by task type
     if task_type == TaskType.POLYP_DETECTION:
+        logger.info("Task: POLYP_DETECTION → detector")
         return "detector"
     elif task_type == TaskType.MODALITY_CLASSIFICATION:
-        return "modality_classifier"
+        logger.info("Task: MODALITY_CLASSIFICATION → modality_classifier (skip detector)")
+        return "modality_classifier"  # Go directly to modality, no need detector
     elif task_type == TaskType.REGION_CLASSIFICATION:
-        return "region_classifier"
+        logger.info("Task: REGION_CLASSIFICATION → region_classifier (skip detector)")
+        return "region_classifier"  # Go directly to region, no need detector
     elif task_type == TaskType.MEDICAL_QA:
-        return "detector"  # Start with detector for context
+        logger.info("Task: MEDICAL_QA → detector (for context)")
+        return "detector"  # Need detector for medical context
     else:  # COMPREHENSIVE
-        return "detector"
+        logger.info("Task: COMPREHENSIVE → detector (full pipeline)")
+        return "detector"  # Start full pipeline
 
 
-# Router after detection
+# ===== FIXED POST-DETECTOR ROUTER =====
 def post_detector_router(state: SystemState) -> str:
     """Routes after detection based on task type and query."""
+    logger = logging.getLogger("graph.routers.post_detector")
     task_type = state.get("task_type", TaskType.COMPREHENSIVE)
     query = state.get("query", "")
     
-    # Nếu có query (dù task là polyp_detection), vẫn cần VQA để answer
-    if query and query.strip():
-        return "vqa"
-    elif task_type == TaskType.POLYP_DETECTION:
-        return "synthesizer"
+    logger.info(f"Post-detector routing for task: {task_type}, has query: {bool(query)}")
+    
+    # LOGIC: Detector chỉ chạy cho POLYP_DETECTION, MEDICAL_QA, và COMPREHENSIVE
+    # Vì vậy post-detector logic phải match với điều này
+    
+    if task_type == TaskType.POLYP_DETECTION:
+        if query and query.strip():
+            logger.info("POLYP_DETECTION with query → VQA for explanation")
+            return "vqa"
+        else:
+            logger.info("POLYP_DETECTION without query → synthesizer")
+            return "synthesizer"
+    
+    elif task_type == TaskType.MEDICAL_QA:
+        logger.info("MEDICAL_QA after detection → VQA for question answering")
+        return "vqa"  # Always go to VQA for medical Q&A
+    
+    elif task_type == TaskType.COMPREHENSIVE:
+        logger.info("COMPREHENSIVE after detection → modality_classifier (continue pipeline)")
+        return "modality_classifier"  # Continue full pipeline
+    
     else:
-        return "modality_classifier"
+        # Shouldn't reach here if task_router is correct
+        logger.warning(f"Unexpected task_type {task_type} after detector, going to synthesizer")
+        return "synthesizer"
 
 
-# Router after modality classification
+# ===== FIXED POST-MODALITY ROUTER =====
 def post_modality_router(state: SystemState) -> str:
     """Routes to the next step after modality classification."""
     logger = logging.getLogger("graph.routers.post_modality")
@@ -69,31 +93,45 @@ def post_modality_router(state: SystemState) -> str:
     
     logger.info(f"Post-modality routing for task type: {task_type}")
     
-    if task_type == TaskType.MODALITY_CLASSIFICATION:
-        return "synthesizer"
-    elif task_type == TaskType.COMPREHENSIVE:
-        return "region_classifier"
+    # LOGIC: Modality classifier chỉ chạy cho COMPREHENSIVE
+    # (vì các task khác đi thẳng đến target classifier)
+    
+    if task_type == TaskType.COMPREHENSIVE:
+        logger.info("COMPREHENSIVE after modality → region_classifier")
+        return "region_classifier"  # Continue to region classification
     else:
+        # Shouldn't reach here normally, but handle gracefully
+        logger.warning(f"Unexpected task_type {task_type} after modality, going to synthesizer")
         return "synthesizer"
 
 
-# Router after region classification
+# ===== FIXED POST-REGION ROUTER =====
 def post_region_router(state: SystemState) -> str:
     """Routes to the next step after region classification."""
     logger = logging.getLogger("graph.routers.post_region")
     task_type = state.get("task_type", TaskType.COMPREHENSIVE)
+    query = state.get("query", "")
     
     logger.info(f"Post-region routing for task type: {task_type}")
     
     if task_type == TaskType.REGION_CLASSIFICATION:
-        return "synthesizer"
-    elif task_type == TaskType.COMPREHENSIVE and state.get("query"):
-        return "vqa"
+        logger.info("REGION_CLASSIFICATION complete → synthesizer")
+        return "synthesizer"  # Task complete
+    
+    elif task_type == TaskType.COMPREHENSIVE:
+        if query and query.strip():
+            logger.info("COMPREHENSIVE with query → VQA for final analysis")
+            return "vqa"  # Answer user's question
+        else:
+            logger.info("COMPREHENSIVE without query → synthesizer")
+            return "synthesizer"  # Just synthesis detection + classification
+    
     else:
+        logger.warning(f"Unexpected task_type {task_type} after region, going to synthesizer")
         return "synthesizer"
 
 
-# Router after VQA
+# ===== POST-VQA ROUTER (unchanged) =====
 def post_vqa_router(state: SystemState) -> str:
     """Routes to the next step after VQA."""
     logger = logging.getLogger("graph.routers.post_vqa")
@@ -104,9 +142,19 @@ def post_vqa_router(state: SystemState) -> str:
     
     logger.info(f"Post-VQA routing. Needs reflection: {needs_reflection}, Reflection available: {reflection_available}")
     
-    if needs_reflection and reflection_available:
+    # For LLaVA-based processing, consider reflection less critical
+    vqa_result = state.get("vqa_result", {})
+    query_type = vqa_result.get("query_type", "unknown")
+    
+    if query_type == "text_only":
+        # Text-only queries processed by LLaVA typically don't need reflection
+        logger.info("Text-only LLaVA processing complete, going to synthesizer")
+        return "synthesizer"
+    elif needs_reflection and reflection_available:
+        logger.info("Image-based query needs reflection")
         return "reflection"
     else:
+        logger.info("Going directly to synthesizer")
         return "synthesizer"
 
 

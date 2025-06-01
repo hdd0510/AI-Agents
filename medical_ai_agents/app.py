@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 
 """
-Medical AI Chatbot Launcher - FIXED với Image Display + Streaming
+Medical AI Chatbot Launcher - CLEANED & SIMPLIFIED
 ===========================
-Script khởi động chatbot với nhiều tùy chọn cấu hình.
+Script khởi động chatbot với logic đã được simplified.
 """
 # ---- PATCH Pydantic ↔ Starlette Request -------------------------------------
 from starlette.requests import Request as _StarletteRequest
@@ -20,8 +20,13 @@ import os
 import sys
 import json
 import time
+import logging
 from pathlib import Path
 os.environ['GRADIO_TEMP_DIR'] = '/tmp'
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Add project root to path
 project_root = Path(__file__).parent
@@ -132,7 +137,7 @@ def create_enhanced_chatbot():
     config = MedicalAIConfig()
     
     class EnhancedMedicalAIChatbot(MedicalAIChatbot):
-        """Chatbot với các tính năng nâng cao + streaming."""
+        """Chatbot với các tính năng nâng cao + streaming (SIMPLIFIED)."""
         
         def __init__(self, config: MedicalAIConfig):
             self.app_config = config
@@ -153,7 +158,7 @@ def create_enhanced_chatbot():
             return MedicalAISystem(medical_config)
         
         def process_message_streaming(self, message, image, history, username, session_state):
-            """STREAMING version của process_message."""
+            """SIMPLIFIED streaming version - cleaned up logic."""
             import uuid
             
             # Generate session and user IDs
@@ -168,20 +173,20 @@ def create_enhanced_chatbot():
             yield "", history, session_state
             
             try:
-                response_parts = []
-                analysis_result = None
-                
                 # Get contextual information
                 context = self.memory.get_contextual_prompt(session_id, user_id)
                 
-                # Process image if provided
-                if image is not None:
-                    # Streaming progress
+                # SIMPLIFIED: Determine processing mode
+                has_image = image is not None
+                
+                if has_image:
+                    # =============  IMAGE ANALYSIS WORKFLOW =============
+                    logger.info(f"Processing image analysis for user {username}")
+                    
                     history[-1][1] = "🔍 Đang phân tích hình ảnh..."
                     yield "", history, session_state
                     time.sleep(0.5)
                     
-                    # Analyze image with Medical AI
                     history[-1][1] = "⚙️ Chạy AI detection..."
                     yield "", history, session_state
                     
@@ -191,8 +196,6 @@ def create_enhanced_chatbot():
                         medical_context={"user_context": context} if context else None
                     )
                     
-                    analysis_result = result
-                    
                     if result.get("success", False):
                         # Stream response parts
                         history[-1][1] = "📝 Đang tạo báo cáo..."
@@ -201,12 +204,10 @@ def create_enhanced_chatbot():
                         
                         # Create comprehensive response
                         if "final_answer" in result:
-                            response_parts.append("🔍 **Kết quả phân tích hình ảnh:**")
-                            
-                            # Stream the final answer word by word (tùy chọn)
                             final_answer = result["final_answer"]
                             streaming_text = "🔍 **Kết quả phân tích hình ảnh:**\n\n"
                             
+                            # Stream the final answer word by word
                             words = final_answer.split()
                             for i, word in enumerate(words):
                                 streaming_text += word + " "
@@ -217,7 +218,7 @@ def create_enhanced_chatbot():
                             
                             response_parts = [streaming_text.rstrip()]
                         
-                        # Add detection details
+                        # Add detection details and visualization if available
                         if "agent_results" in result and "detector_result" in result["agent_results"]:
                             detector = result["agent_results"]["detector_result"]
                             if detector.get("success") and detector.get("count", 0) > 0:
@@ -227,32 +228,23 @@ def create_enhanced_chatbot():
                                 
                                 response_parts.append(detection_info)
                                 
-                                # Stream detection info
                                 current_response = "\n".join(response_parts)
                                 history[-1][1] = current_response
                                 yield "", history, session_state
                                 time.sleep(0.5)
                                 
-                                # FIXED: Hiển thị ảnh visualization trong chat
+                                # Add visualization if available
                                 if detector.get("visualization_base64") and detector.get("visualization_available"):
-                                    # Lưu base64 vào session_state để sử dụng sau
                                     session_state["last_visualization"] = detector.get("visualization_base64")
-                                    
-                                    # Tạo data URL từ base64
                                     img_data_url = f"data:image/png;base64,{detector.get('visualization_base64')}"
-                                    
-                                    # FIXED: Sử dụng HTML img tag thay vì markdown
                                     viz_html = f'\n\n📊 **Kết quả phát hiện polyp:**\n<img src="{img_data_url}" alt="Kết quả phát hiện polyp" style="max-width: 100%; height: auto; border-radius: 8px; margin: 10px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">'
-                                    
                                     response_parts.append(viz_html)
                                     
-                                    # Stream với ảnh
                                     current_response = "\n".join(response_parts)
                                     history[-1][1] = current_response
                                     yield "", history, session_state
                                     time.sleep(0.5)
                                     
-                                    # Lưu thông tin ảnh vào session_state
                                     session_state["has_image_result"] = True
                                     session_state["last_result_image_data"] = img_data_url
                         
@@ -279,50 +271,170 @@ def create_enhanced_chatbot():
                         yield "", history, session_state
                 
                 else:
-                    # Text-only conversation - stream response
-                    text_response = "💬 **Trả lời:**\n\n"
+                    # =============  TEXT-ONLY WORKFLOW (SIMPLIFIED) =============
+                    logger.info(f"Processing text-only query: '{message[:50]}...'")
                     
-                    if context:
-                        text_response += "💭 **Dựa trên thông tin trước đó:**\n"
-                        text_response += (context[:200] + "..." if len(context) > 200 else context) + "\n\n"
-                    
-                    text_response += "Tôi có thể giúp bạn phân tích hình ảnh nội soi và trả lời các câu hỏi y tế. "
-                    text_response += "Vui lòng tải lên hình ảnh để tôi có thể hỗ trợ tốt hơn."
-                    
-                    # Stream text response
-                    words = text_response.split()
-                    streaming_text = ""
-                    for i, word in enumerate(words):
-                        streaming_text += word + " "
-                        if i % 3 == 0:  # Update every 3 words
-                            history[-1][1] = streaming_text
-                            yield "", history, session_state
-                            time.sleep(0.05)
-                    
-                    history[-1][1] = streaming_text.strip()
+                    history[-1][1] = "🧠 Đang tư vấn qua LLaVA..."
                     yield "", history, session_state
+                    time.sleep(0.3)
+                    
+                    # SIMPLIFIED: Call medical AI with clean parameters
+                    result = self.medical_ai.analyze(
+                        image_path=None,  # No image - triggers text-only mode
+                        query=message,
+                        medical_context={
+                            "user_context": context,
+                            "is_text_only": True
+                        } if context else {"is_text_only": True}
+                    )
+                    
+                    logger.debug(f"Text-only result: success={result.get('success', False)}")
+                    
+                    if result.get("success", False):
+                        # Stream LLaVA text-only response
+                        history[-1][1] = "📝 Đang tạo tư vấn..."
+                        yield "", history, session_state
+                        time.sleep(0.3)
+                        
+                        # Check if VQA result is successful
+                        vqa_success = True
+                        if "agent_results" in result and "vqa_result" in result["agent_results"]:
+                            vqa_result = result["agent_results"]["vqa_result"]
+                            vqa_success = vqa_result.get("success", False)
+                            
+                            if not vqa_success:
+                                # VQA/LLaVA failed - show safety error
+                                error_response = "❌ **Hệ thống tư vấn y tế gặp sự cố**\n\n"
+                                error_response += vqa_result.get("answer", "Lỗi không xác định trong quá trình tư vấn.")
+                                error_response += "\n\n🔄 **Vui lòng:**\n"
+                                error_response += "- Thử lại sau vài phút\n"
+                                error_response += "- Hoặc tham khảo bác sĩ trực tiếp nếu cần thiết"
+                                
+                                history[-1][1] = error_response
+                                yield "", history, session_state
+                                return  # Exit early
+                        
+                        # VQA succeeded - process response
+                        if vqa_success and "final_answer" in result:
+                            final_answer = result["final_answer"]
+                            streaming_text = "🧠 **Tư vấn y tế qua LLaVA:**\n\n"
+                            
+                            # Add context if available
+                            if context:
+                                streaming_text += "💭 **Dựa trên thông tin trước đó:**\n"
+                                streaming_text += (context[:200] + "..." if len(context) > 200 else context) + "\n\n"
+                            
+                            # Stream the LLaVA medical consultation
+                            words = final_answer.split()
+                            for i, word in enumerate(words):
+                                streaming_text += word + " "
+                                if i % 3 == 0:  # Update every 3 words for smoother streaming
+                                    history[-1][1] = streaming_text
+                                    yield "", history, session_state
+                                    time.sleep(0.05)
+                            
+                            # Add LLaVA processing info
+                            streaming_text += f"\n\n🔬 **Được xử lý bởi:** LLaVA-Med (Text-Only Mode)"
+                            streaming_text += f"\n📊 **Loại tư vấn:** Medical consultation without image"
+                            
+                            # Add medical disclaimer
+                            streaming_text += f"\n\n⚠️ **Lưu ý quan trọng:**"
+                            streaming_text += f"\n- Đây là tư vấn sơ bộ từ AI, không thay thế khám trực tiếp"
+                            streaming_text += f"\n- Hãy tham khảo ý kiến bác sĩ chuyên khoa để có chẩn đoán chính xác"
+                            streaming_text += f"\n- Nếu có triệu chứng nghiêm trọng, hãy đến cơ sở y tế ngay lập tức"
+                            
+                            history[-1][1] = streaming_text.strip()
+                            yield "", history, session_state
+                            
+                        else:
+                            # Fallback handling with safety checks
+                            fallback_response = self._create_safe_fallback_response(result, context, message)
+                            history[-1][1] = fallback_response
+                            yield "", history, session_state
+                    
+                    else:
+                        # Handle text-only system error
+                        logger.error(f"Medical AI system failed: {result.get('error', 'Unknown error')}")
+                        error_response = self._create_system_error_response(message)
+                        history[-1][1] = error_response
+                        yield "", history, session_state
                 
                 # Save to memory
                 final_response = history[-1][1]
                 interaction = {
                     "query": message,
                     "response": final_response,
-                    "has_image": image is not None,
-                    "analysis": analysis_result,
-                    "polyp_count": analysis_result.get("polyp_count", 0) if analysis_result else 0
+                    "has_image": has_image,
+                    "analysis": result if 'result' in locals() else None,
+                    "polyp_count": result.get("polyp_count", 0) if 'result' in locals() else 0,
+                    "is_text_only": not has_image
                 }
                 
+                logger.debug(f"Saving interaction to memory: query='{message[:30]}...', has_image={has_image}")
                 self.memory.add_to_short_term(session_id, interaction)
                 
                 # Save important interactions to long term
-                if image is not None or "polyp" in message.lower():
+                if has_image or "polyp" in message.lower() or "y tế" in message.lower():
+                    logger.info(f"Saving important interaction to long-term memory for user {user_id}")
                     self.memory.save_to_long_term(user_id, session_id, interaction)
                 
             except Exception as e:
-                error_response = f"❌ Xin lỗi, có lỗi xảy ra: {str(e)}"
+                logger.error(f"Error in process_message_streaming: {str(e)}", exc_info=True)
+                error_response = f"❌ Xin lỗi, có lỗi hệ thống xảy ra: {str(e)}"
                 history[-1][1] = error_response
                 yield "", history, session_state
         
+        def _create_safe_fallback_response(self, result, context, message):
+            """Create safe fallback response for text-only queries."""
+            fallback_response = "🧠 **Tư vấn y tế:**\n\n"
+            
+            # Check for VQA result first
+            if "agent_results" in result and "vqa_result" in result["agent_results"]:
+                vqa_result = result["agent_results"]["vqa_result"]
+                if vqa_result.get("success", False):
+                    llava_answer = vqa_result.get("answer", "")
+                    if llava_answer and len(llava_answer.strip()) > 20:
+                        fallback_response += llava_answer
+                        if context:
+                            fallback_response = f"💭 **Dựa trên thông tin trước đó:**\n{context[:200]}...\n\n" + fallback_response
+                        
+                        fallback_response += f"\n\n🔬 **Được xử lý bởi:** LLaVA-Med (Text-Only Mode)"
+                        fallback_response += f"\n\n⚠️ **Lưu ý:** Đây là tư vấn AI, hãy tham khảo bác sĩ chuyên khoa."
+                        return fallback_response
+            
+            # Generic helpful response
+            if context:
+                fallback_response += f"💭 **Dựa trên thông tin trước đó:**\n{context[:200]}...\n\n"
+            
+            # Customize based on message content
+            if any(greeting in message.lower() for greeting in ["hello", "hi", "xin chào", "chào"]):
+                fallback_response += "Xin chào! Tôi là trợ lý AI y tế chuyên hỗ trợ phân tích hình ảnh nội soi.\n\n"
+                fallback_response += "🔬 **Tôi có thể giúp bạn:**\n"
+                fallback_response += "- Phân tích hình ảnh nội soi đại tràng\n"
+                fallback_response += "- Phát hiện polyp và các bất thường\n"
+                fallback_response += "- Trả lời câu hỏi về y tế tiêu hóa\n\n"
+                fallback_response += "Bạn có thể tải lên hình ảnh nội soi hoặc đặt câu hỏi cụ thể để tôi hỗ trợ tốt hơn."
+            else:
+                fallback_response += "Cảm ơn bạn đã đưa ra câu hỏi. Để tôi có thể hỗ trợ tốt nhất:\n\n"
+                fallback_response += "📋 **Khuyến nghị:**\n"
+                fallback_response += "1. Mô tả chi tiết hơn về triệu chứng bạn gặp phải\n"
+                fallback_response += "2. Tải lên hình ảnh nội soi nếu có\n"
+                fallback_response += "3. Đặt câu hỏi cụ thể về vấn đề sức khỏe\n\n"
+                fallback_response += "🏥 **Lưu ý:** Tôi là trợ lý AI hỗ trợ, không thay thế khám bác sĩ."
+            
+            return fallback_response
+        
+        def _create_system_error_response(self, message):
+            """Create system error response with helpful guidance."""
+            error_response = "❌ **Hệ thống tạm thời gặp sự cố**\n\n"
+            error_response += "Xin lỗi vì sự bất tiện này. Hệ thống LLaVA hiện không thể xử lý yêu cầu của bạn.\n\n"
+            error_response += "🔄 **Bạn có thể:**\n"
+            error_response += "- Thử lại sau vài phút\n"
+            error_response += "- Đặt lại câu hỏi với từ ngữ khác\n"
+            error_response += "- Tải lên hình ảnh để phân tích trực quan\n\n"
+            error_response += "🏥 **Nếu cần tư vấn gấp:** Vui lòng liên hệ bác sĩ chuyên khoa trực tiếp."
+            return error_response
+
         def create_enhanced_interface(self):
             """Tạo giao diện với nhiều tính năng hơn."""
             
@@ -409,10 +521,10 @@ def create_enhanced_chatbot():
                     ### {self.app_config.get("app.description", "Hệ thống AI hỗ trợ phân tích hình ảnh nội soi")}
                     
                     **🎯 Tính năng nổi bật:**
-                    - 🧠 **Trí nhớ thông minh**: Ghi nhớ lịch sử và cá nhân hóa trải nghiệm
-                    - 🔍 **Phân tích chính xác**: Sử dụng AI đa agent với độ tin cậy cao
-                    - 💬 **Tương tác tự nhiên**: Chat thông minh với khả năng hiểu ngữ cảnh
-                    - 📊 **Streaming response**: Phản hồi real-time thay vì chờ đợi
+                    - 🧠 **LLaVA-Med Integration**: Sử dụng AI chuyên về y tế
+                    - 🔍 **Phân tích chính xác**: AI đa agent với độ tin cậy cao
+                    - 💬 **Tư vấn thông minh**: Hỗ trợ cả hình ảnh và text-only
+                    - 📊 **Streaming response**: Phản hồi real-time
                     """)
                 
                 with gr.Row():
@@ -433,7 +545,7 @@ def create_enhanced_chatbot():
                         with gr.Row(elem_classes=["chat-input-container"]):
                             msg_input = gr.Textbox(
                                 placeholder="💭 Hãy mô tả triệu chứng hoặc đặt câu hỏi về hình ảnh...",
-                                label="Tin nhắc của bạn",
+                                label="Tin nhắn của bạn",
                                 scale=5,
                                 lines=2
                             )
@@ -489,11 +601,10 @@ def create_enhanced_chatbot():
                         
                         # Check for visualization result
                         if "last_result_image_data" in updated_state:
-                            # Convert data URL back to filepath if needed
-                            # For now, just yield the state
                             yield msg, hist, updated_state, None
                             
                     except Exception as e:
+                        logger.error(f"Error in safe_process_message_streaming: {str(e)}", exc_info=True)
                         error_msg = f"❌ Lỗi xử lý: {str(e)}"
                         if history:
                             history[-1][1] = error_msg
@@ -509,6 +620,7 @@ def create_enhanced_chatbot():
                         else:
                             return None
                     except Exception as e:
+                        logger.error(f"Error showing visualization: {str(e)}")
                         return None
                 
                 # Connect all events với streaming
@@ -572,7 +684,7 @@ def main():
     print(f"🔌 Port: {config.get('app.port')}")
     print(f"🌐 Share: {config.get('app.share')}")
     print(f"🖥️  Device: {config.get('medical_ai.device')}")
-    print(f"🎬 Features: Image Display + Streaming Response")
+    print(f"🎬 Features: Simplified Logic + LLaVA Integration")
     
     try:
         # Create enhanced chatbot

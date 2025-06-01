@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 
 """
-Medical AI Tools - LLaVA Tool (Fixed with CLI Logic)
+Medical AI Tools - LLaVA Tool (SIMPLE FIX: Only "query" parameter)
 --------------------------
-Tool sử dụng LLaVA cho VQA trên hình ảnh y tế với logic y hệt CLI.
+Tool sử dụng LLaVA - đã được simplified với consistent parameter naming.
 """
 
 import os
@@ -13,16 +13,17 @@ from typing import Dict, Any, Optional
 from PIL import Image
 import requests
 from io import BytesIO
+import numpy as np
 
 from medical_ai_agents.tools.base_tools import BaseTool
 
 class LLaVATool(BaseTool):
-    """Tool sử dụng model LLaVA để trả lời câu hỏi dựa trên hình ảnh."""
+    """Tool sử dụng model LLaVA - simplified với consistent parameter naming."""
     
     def __init__(self, model_path: str, device: str = "cuda", **kwargs):
         """Initialize LLaVA tool."""
         name = "llava_vqa"
-        description = "Sử dụng LLaVA (Large Language and Vision Assistant) để trả lời câu hỏi dựa trên hình ảnh y tế."
+        description = "Sử dụng LLaVA để trả lời câu hỏi y tế - hỗ trợ cả image+text và text-only queries."
         super().__init__(name=name, description=description)
         
         self.model_path = model_path
@@ -98,9 +99,7 @@ class LLaVATool(BaseTool):
     
     def _load_image(self, image_file: str) -> Image.Image:
         """Load image exactly like CLI version."""
-        print("--------------------------------")
-        print(f"Loading image: {image_file}")
-        print("--------------------------------")
+        self.logger.info(f"Loading image: {image_file}")
         if image_file.startswith('http://') or image_file.startswith('https://'):
             response = requests.get(image_file)
             image = Image.open(BytesIO(response.content)).convert('RGB')
@@ -108,21 +107,40 @@ class LLaVATool(BaseTool):
             image = Image.open(image_file).convert('RGB')
         return image
 
-    def _run(self, image_path: str, question: str, medical_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Run LLaVA on the image with the given question using exact CLI logic."""
+    def _create_placeholder_image(self) -> Image.Image:
+        """Create a simple placeholder image for text-only queries."""
+        # Create a simple white image với medical text
+        image = Image.new('RGB', (512, 512), color=(255, 255, 255))
+        return image
+
+    def _run(self, query: str, image_path: Optional[str] = None, medical_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Run LLaVA on image+text or text-only query."""
         if self.model is None:
             return {"success": False, "error": "LLaVA model not initialized"}
+        
+        if not query or not query.strip():
+            return {"success": False, "error": "Query parameter is required"}
         
         try:
             from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
             from llava.conversation import conv_templates, SeparatorStyle
             from llava.mm_utils import process_images, tokenizer_image_token
             
-            # Load image using CLI method
-            image = self._load_image(image_path)
+            # Handle both image and text-only cases
+            has_image = image_path is not None and os.path.exists(image_path)
+            
+            if has_image:
+                # Load real image
+                image = self._load_image(image_path)
+                self.logger.info(f"Processing with real image: {image_path}")
+            else:
+                # Create placeholder for text-only
+                image = self._create_placeholder_image()
+                self.logger.info("Processing text-only query with placeholder image")
+            
             image_size = image.size
             
-            # Process images exactly like CLI - Similar operation in model_worker.py
+            # Process images exactly like CLI
             image_tensor = process_images([image], self.image_processor, self.model.config)
             if type(image_tensor) is list:
                 image_tensor = [img.to(self.model.device, dtype=torch.float16) for img in image_tensor]
@@ -144,14 +162,32 @@ class LLaVATool(BaseTool):
                     context_str += f"- {key}: {value}\n"
                 context_str += "\n"
             
-            # FIX: Sử dụng question parameter
-            inp = context_str + question  # ← Thêm dòng này
+            # Different prompts for text-only vs image-based
+            if has_image:
+                # Image-based query
+                inp = context_str + f"Please analyze this medical image and answer: {query}"
+            else:
+                # Text-only query - instruct LLaVA to use medical knowledge
+                inp = context_str + f"""
+You are a gastroenterology specialist with extensive medical knowledge. Please provide professional medical consultation for the following question (no image analysis needed, use your medical expertise):
+
+Question: {query}
+
+Please provide:
+1. Professional medical assessment
+2. Possible causes/explanations
+3. Recommendations (examinations, lifestyle, when to seek urgent care)
+4. Important notes and disclaimers
+
+Remember to recommend direct medical consultation when appropriate and avoid definitive diagnosis through chat.
+"""
             
-            # Add image token exactly like CLI
+            # Add image token for consistency (LLaVA expects it)
             if self.model.config.mm_use_im_start_end:
                 inp = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + '\n' + inp
             else:
                 inp = DEFAULT_IMAGE_TOKEN + '\n' + inp
+            
             # Build conversation
             conv.append_message(conv.roles[0], inp)
             conv.append_message(conv.roles[1], None)
@@ -177,7 +213,6 @@ class LLaVATool(BaseTool):
             outputs = self.tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
             
             # Extract only the response part (remove the original prompt)
-            # Find where the assistant response starts
             if conv.roles[1] + ":" in outputs:
                 answer = outputs.split(conv.roles[1] + ":")[-1].strip()
             else:
@@ -194,7 +229,9 @@ class LLaVATool(BaseTool):
             
             return {
                 "success": True,
-                "answer": answer
+                "answer": answer,
+                "has_image": has_image,
+                "query_type": "image_based" if has_image else "text_only"
             }
             
         except Exception as e:
@@ -208,13 +245,15 @@ class LLaVATool(BaseTool):
     def get_parameters_schema(self) -> Dict[str, Any]:
         """Return JSON schema for the tool parameters."""
         return {
+            "query": {
+                "type": "string",
+                "description": "Medical question or consultation request",
+                "required": True
+            },
             "image_path": {
                 "type": "string",
-                "description": "Path to the image file to analyze (local path or URL)"
-            },
-            "question": {
-                "type": "string",
-                "description": "Question to ask about the image"
+                "description": "Path to the image file (optional - if not provided, will do text-only consultation)",
+                "required": False
             },
             "medical_context": {
                 "type": "object",

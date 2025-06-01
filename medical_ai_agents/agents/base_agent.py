@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Medical AI Agents - Base Agent
+Medical AI Agents - Base Agent (FIXED: Synthesis with Query Context)
 -----------------------------
 Định nghĩa lớp cơ sở mới cho các agents trong hệ thống AI y tế.
 """
@@ -146,12 +146,21 @@ class BaseAgent(ABC):
                 tool_outputs[tool_name] = tool_result
                 self.logger.info(f"Tool {tool_name} completed with result: {json.dumps(tool_result, indent=2)}")
         
-        # Let LLM synthesize final result
-        systhesis_message = [
+        # FIXED: Let LLM synthesize final result WITH task input context
+        synthesis_message = [
             SystemMessage(content=self.system_prompt),
-            HumanMessage(content=f"Tool results: {json.dumps(results, indent=2)}\n\n {self._format_synthesis_input()}")
+            HumanMessage(content=f"""Task context:
+Query: "{task_input.get('query', 'No specific query')}"
+Image path: {task_input.get('image_path', 'No image')}
+Is text-only: {task_input.get('is_text_only', False)}
+Medical context: {json.dumps(task_input.get('medical_context', {}), indent=2)}
+
+Tool execution results:
+{json.dumps(results, indent=2)}
+
+{self._format_synthesis_input()}""")
         ]
-        synthesis_response = self.llm.invoke(systhesis_message)
+        synthesis_response = self.llm.invoke(synthesis_message)
         
         # Return agent result
         agent_result = self._extract_agent_result(synthesis_response.content)
@@ -161,8 +170,10 @@ class BaseAgent(ABC):
     def _extract_task_input(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Extract task-specific input from state."""
         pass
+    
     @abstractmethod
     def _format_synthesis_input(self) -> str:
+        """Format synthesis input for LLM prompt."""
         pass
 
     @abstractmethod
