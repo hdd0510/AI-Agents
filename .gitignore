@@ -5,3 +5,4 @@ stored_folder/
 medical_ai_memory.db
 .env
 LightRAG/
+medical_ai_agents/tools/vqa/LLaVA/

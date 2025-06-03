@@ -2,45 +2,41 @@
 # -*- coding: utf-8 -*-
 
 """
-Medical AI Agents - Enhanced Classifier Agent
---------------------------------------------
-Agent phân loại hình ảnh với LLM controller và classifier tool - Enhanced flow.
+Medical AI Agents - Classifier Agent with ReAct Pattern
+------------------------------------------------------
+Agent phân loại hình ảnh nội soi sử dụng ReAct framework theo BaseAgent mới.
 """
 
 import json
 from typing import Dict, Any, List
 import logging
-import re
 
-from medical_ai_agents.agents.base_agent import BaseAgent
+from medical_ai_agents.agents.base_agent import BaseAgent, ThoughtType
 from medical_ai_agents.tools.base_tools import BaseTool
 from medical_ai_agents.tools.classifier.cls_tools import ClassifierTool
 
+
 class ClassifierAgent(BaseAgent):
-    """Agent phân loại hình ảnh nội soi sử dụng LLM controller."""
+    """Classifier Agent với ReAct pattern cho phân loại hình ảnh nội soi."""
     
     def __init__(self, model_path: str, class_names: List[str], 
-                classifier_type: str = "modality", llm_model: str = "gpt-4o-mini", device: str = "cuda"):
-        """
-        Khởi tạo Classifier Agent với LLM controller.
-        
-        Args:
-            model_path: Đường dẫn đến model weights
-            class_names: Danh sách tên các lớp
-            classifier_type: Loại classifier ('modality' hoặc 'region')
-            llm_model: Mô hình LLM sử dụng làm controller
-            device: Device để chạy model (cuda/cpu)
-        """
-        # Set attributes before super().__init__()
+                classifier_type: str = "modality", llm_model: str = "gpt-4o-mini", 
+                device: str = "cuda"):
+        """Initialize Classifier ReAct Agent."""
         self.model_path = model_path
         self.class_names = class_names
         self.classifier_type = classifier_type
         
-        super().__init__(name=f"{classifier_type.capitalize()} Classifier Agent", llm_model=llm_model, device=device)
+        # Set specific agent name based on type
+        agent_name = f"{classifier_type.capitalize()} Classifier Agent"
+        super().__init__(name=agent_name, llm_model=llm_model, device=device)
+        
+        # Specific configuration
+        self.max_iterations = 3  # Classification typically needs fewer steps
         self.classifier_tool = None
     
     def _register_tools(self) -> List[BaseTool]:
-        """Register tools for this agent."""
+        """Register classification tools."""
         self.classifier_tool = ClassifierTool(
             model_path=self.model_path,
             class_names=self.class_names,
@@ -49,332 +45,314 @@ class ClassifierAgent(BaseAgent):
         )
         return [self.classifier_tool]
     
-    def _get_system_prompt(self) -> str:
-        """Get the system prompt that defines this agent's role."""
+    def _get_agent_description(self) -> str:
+        """Get classifier agent description."""
         if self.classifier_type == "modality":
-            type_desc = "kỹ thuật chụp nội soi (WLI, BLI, FICE, LCI)"
-            outcome_key = "modality_result"
-            examples = """
-            - WLI (White Light Imaging): Ánh sáng trắng tiêu chuẩn
-            - BLI (Blue Light Imaging): Ánh sáng xanh tăng cường mạch máu
-            - FICE: Công nghệ cải thiện màu sắc
-            - LCI (Linked Color Imaging): Tăng cường độ tương phản màu
-            """
-        else:
-            type_desc = "vị trí giải phẫu trong đường tiêu hóa"
-            outcome_key = "region_result"
-            examples = """
-            - Hau_hong: Hầu họng
-            - Thuc_quan: Thực quản  
-            - Tam_vi: Tâm vị (giao giữa thực quản và dạ dày)
-            - Than_vi: Thân vị (thân dạ dày)
-            - Phinh_vi: Phình vị (đáy dạ dày)
-            - Hang_vi: Hang vị (phần dưới dạ dày)
-            - Bo_cong_lon/Bo_cong_nho: Bờ cong lớn/nhỏ của dạ dày
-            - Hanh_ta_trang: Hành tá tràng
-            - Ta_trang: Tá tràng
-            """
-        
-        return f"""Bạn là một AI chuyên gia về phân loại hình ảnh nội soi tiêu hóa, chuyên về {type_desc}.
-Nhiệm vụ của bạn là phân tích hình ảnh để xác định {type_desc} chính xác.
-
-Các lớp phân loại có thể:
-{examples}
-
-Bạn có thể sử dụng công cụ sau:
-1. {self.classifier_type}_classifier: Công cụ phân loại hình ảnh
-   - Tham số: image_path (str)
-   - Kết quả: lớp được phân loại, độ tin cậy, và thông tin bổ sung
-
-Quy trình làm việc của bạn:
-1. Xác định hình ảnh cần phân loại
-2. Sử dụng công cụ {self.classifier_type}_classifier để phân loại hình ảnh
-3. Phân tích kết quả phân loại và độ tin cậy
-4. Nếu độ tin cậy thấp, giải thích lý do có thể
-5. Đưa ra kết luận cuối cùng về {type_desc}
-
-Khi sử dụng công cụ, trả lời theo định dạng:
-Tool: {self.classifier_type}_classifier
-Parameters: {{"image_path": "path/to/image.jpg"}}
-
-Sau khi có kết quả từ công cụ, hãy phân tích và đưa ra nhận xét chuyên môn."""
-
+            return """I am a medical imaging modality classification specialist.
+My expertise includes:
+- Identifying endoscopy imaging techniques (WLI, BLI, FICE, LCI)
+- Understanding the characteristics of each imaging modality
+- Explaining the clinical advantages of different techniques
+- Recommending appropriate modality for specific diagnostic needs
+- Assessing image quality and technical parameters"""
+        else:  # region classifier
+            return """I am an anatomical region classification specialist for gastrointestinal endoscopy.
+My expertise includes:
+- Identifying anatomical locations in the GI tract
+- Understanding anatomical landmarks and transitions
+- Explaining the clinical significance of different regions
+- Correlating anatomical location with pathology risk
+- Providing location-specific screening recommendations"""
+    
     def initialize(self) -> bool:
-        """Khởi tạo agent và các công cụ."""
+        """Initialize classifier agent."""
         try:
-            # Tools are already initialized in _register_tools
             self.initialized = True
+            self.logger.info(f"{self.name} initialized successfully")
             return True
         except Exception as e:
-            self.logger.error(f"Failed to initialize classifier agent: {str(e)}")
+            self.logger.error(f"Failed to initialize {self.name}: {str(e)}")
             self.initialized = False
             return False
     
     def _extract_task_input(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract task-specific input from state."""
+        """Extract classification task input."""
         return {
             "image_path": state.get("image_path", ""),
             "query": state.get("query", ""),
-            "classifier_type": self.classifier_type
+            "classifier_type": self.classifier_type,
+            "previous_results": self._get_previous_results(state)
         }
     
+    def _get_previous_results(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Get results from previous agents for context."""
+        previous = {}
+        
+        # Get detector results if available
+        if "detector_result" in state:
+            detector = state["detector_result"]
+            if detector.get("success", False):
+                previous["polyp_count"] = detector.get("count", 0)
+                if detector.get("objects"):
+                    previous["polyp_locations"] = [
+                        obj.get("position_description", "unknown") 
+                        for obj in detector["objects"][:3]
+                    ]
+        
+        # Get other classifier result if this is the second classifier
+        if self.classifier_type == "region" and "modality_result" in state:
+            modality = state["modality_result"]
+            if modality.get("success", False):
+                previous["imaging_modality"] = modality.get("class_name", "Unknown")
+        elif self.classifier_type == "modality" and "region_result" in state:
+            region = state["region_result"]
+            if region.get("success", False):
+                previous["anatomical_region"] = region.get("class_name", "Unknown")
+        
+        return previous
+    
     def _format_task_input(self, task_input: Dict[str, Any]) -> str:
-        """Format task input for LLM prompt."""
+        """Format task input cho ReAct processing (abstract method implementation)."""
         image_path = task_input.get("image_path", "")
+        query = task_input.get("query", "")
         classifier_type = task_input.get("classifier_type", "")
+        previous = task_input.get("previous_results", {})
         
-        return f"""Hình ảnh cần phân loại: {image_path}
+        # Build context from previous results
+        context_parts = []
+        if previous:
+            if "polyp_count" in previous:
+                context_parts.append(f"- Polyp detection: {previous['polyp_count']} polyp(s) found")
+            if "polyp_locations" in previous:
+                context_parts.append(f"- Polyp locations: {', '.join(previous['polyp_locations'])}")
+            if "imaging_modality" in previous:
+                context_parts.append(f"- Imaging technique: {previous['imaging_modality']}")
+            if "anatomical_region" in previous:
+                context_parts.append(f"- Anatomical location: {previous['anatomical_region']}")
         
-Loại phân loại: {classifier_type}
+        context_str = "\n".join(context_parts) if context_parts else "No previous analysis results"
+        
+        # Build task description based on classifier type
+        if classifier_type == "modality":
+            task_desc = """Classify the endoscopy imaging modality/technique.
+Possible modalities:
+- WLI (White Light Imaging): Standard white light endoscopy
+- BLI (Blue Light Imaging): Enhanced visualization of blood vessels and surface patterns
+- FICE (Flexible spectral Imaging Color Enhancement): Digital chromoendoscopy
+- LCI (Linked Color Imaging): Enhanced color contrast for improved lesion detection"""
+        else:  # region
+            task_desc = """Classify the anatomical region in the gastrointestinal tract.
+Possible regions:
+- Hau_hong (Pharynx): Throat region
+- Thuc_quan (Esophagus): Tube connecting throat to stomach
+- Tam_vi (Cardia): Junction between esophagus and stomach
+- Than_vi (Body): Main part of stomach
+- Phinh_vi (Fundus): Upper curved portion of stomach
+- Hang_vi (Antrum): Lower portion of stomach
+- Bo_cong_lon/Bo_cong_nho: Greater/Lesser curvature of stomach
+- Hanh_ta_trang (Duodenal bulb): First part of duodenum
+- Ta_trang (Duodenum): First section of small intestine"""
+        
+        prompt = f"""**Medical Image Classification Task**
 
-Hãy phân loại hình ảnh này theo {classifier_type}. Sử dụng công cụ có sẵn để phân loại và phân tích.
-Trả lời theo định dạng:
+Image to classify: {image_path}
+Classification type: {classifier_type}
+User query: "{query if query else f'Please classify the {classifier_type} of this endoscopy image'}"
 
-Tool: {classifier_type}_classifier
-Parameters: {{"image_path": "{image_path}"}}
+Previous analysis results:
+{context_str}
 
-Sau khi sử dụng công cụ, hãy phân tích kết quả và đưa ra nhận xét chuyên môn.
-"""
+{task_desc}
+
+Requirements:
+1. Use the {classifier_type}_classifier tool to classify the image
+2. Explain the visual characteristics that led to the classification
+3. Discuss clinical significance of the identified {classifier_type}
+4. Consider how the classification relates to any previous findings
+
+Please proceed with the classification analysis using ReAct pattern."""
+        
+        return prompt
     
-    def _format_synthesis_input(self) -> str:
-        """Format synthesis input for LLM prompt."""
-        outcome_key = f"{self.classifier_type}_result"
-        type_desc = "kỹ thuật chụp nội soi" if self.classifier_type == "modality" else "vị trí giải phẫu"
+    def _format_agent_result(self, react_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Format ReAct result into classifier agent output."""
+        result_key = f"{self.classifier_type}_result"
         
-        return f"""
-Dựa trên kết quả từ tools, bạn phải xác định:
-- Lớp phân loại được xác định cho {type_desc}
-- Độ tin cậy của kết quả phân loại
-- Giải thích về đặc điểm của lớp phân loại
-- Nếu độ tin cậy thấp, hãy giải thích lý do có thể
-
-Bạn phải trả về JSON với định dạng:
-```json
-{{
-  "{outcome_key}": {{
-    "success": true/false,
-    "class_name": "tên lớp được phân loại",
-    "confidence": confidence_value,
-    "description": "mô tả chi tiết về lớp phân loại",
-    "analysis": "phân tích chuyên môn về kết quả phân loại"
-  }}
-}}
-```
-        """
-    
-    def _parse_tool_calls(self, plan: str) -> List[Dict[str, Any]]:
-        """Enhanced parsing for tool calls with better error handling."""
-        tool_calls = []
+        if not react_result.get("success", False):
+            return {
+                result_key: {
+                    "success": False,
+                    "error": react_result.get("error", "Classification failed"),
+                    "reasoning_steps": len(self.react_history) if hasattr(self, 'react_history') else 0
+                }
+            }
         
-        # Method 1: Standard format parsing
-        lines = plan.split("\n")
-        current_tool = None
-        current_params = {}
+        # Extract classification data from ReAct history
+        class_name = "Unknown"
+        confidence = 0.0
+        all_classes = {}
+        description = ""
         
-        for line in lines:
-            line_stripped = line.strip()
-            if line_stripped.startswith("Tool:"):
-                # Save previous tool if exists
-                if current_tool:
-                    tool_calls.append({
-                        "tool_name": current_tool,
-                        "params": current_params
-                    })
-                
-                # Start new tool
-                current_tool = line_stripped.replace("Tool:", "").strip()
-                current_params = {}
-            
-            elif line_stripped.startswith("Parameters:"):
-                # Try to parse JSON parameters
+        for step in self.react_history:
+            if step.observation:
                 try:
-                    params_text = line_stripped.replace("Parameters:", "").strip()
-                    
-                    # Handle both single line and multiline JSON
-                    if params_text.startswith("{"):
-                        # Try to find complete JSON
-                        json_str = params_text
-                        if not params_text.endswith("}"):
-                            # Look for closing brace in subsequent lines
-                            line_idx = lines.index(line)
-                            for next_line in lines[line_idx + 1:]:
-                                json_str += " " + next_line.strip()
-                                if "}" in next_line:
-                                    break
-                        
-                        current_params = json.loads(json_str)
-                        
-                except (json.JSONDecodeError, ValueError) as e:
-                    self.logger.warning(f"Failed to parse parameters: {line_stripped}, error: {e}")
-                    current_params = {}
-        
-        # Add last tool
-        if current_tool:
-            tool_calls.append({
-                "tool_name": current_tool,
-                "params": current_params
-            })
-        
-        # Method 2: Regex extraction as fallback
-        if not tool_calls:
-            import re
-            
-            # Look for tool patterns specific to classifier
-            tool_pattern = rf'Tool:\s*({self.classifier_type}_classifier)'
-            param_pattern = r'Parameters:\s*(\{[^}]*\})'
-            
-            tools = re.findall(tool_pattern, plan)
-            params = re.findall(param_pattern, plan, re.DOTALL)
-            
-            for i, tool in enumerate(tools):
-                param_dict = {}
-                if i < len(params):
-                    try:
-                        param_dict = json.loads(params[i])
-                    except:
-                        pass
-                
-                tool_calls.append({
-                    "tool_name": tool,
-                    "params": param_dict
-                })
-        
-        # Method 3: Fallback - if still no tools, create default call
-        if not tool_calls:
-            self.logger.warning("No tool calls parsed, creating default classifier call")
-            # Try to extract image_path from the plan text
-            image_path = ""
-            image_matches = re.findall(r'image_path["\s]*:["\s]*([^"]+)', plan)
-            if image_matches:
-                image_path = image_matches[0]
-            elif "image_path" in plan:
-                # Fallback extraction
-                lines = plan.split('\n')
-                for line in lines:
-                    if 'image_path' in line and ':' in line:
-                        try:
-                            image_path = line.split(':')[1].strip().strip('"')
-                            break
-                        except:
-                            pass
-            
-            # If we found image_path, create the tool call
-            if image_path:
-                tool_calls.append({
-                    "tool_name": f"{self.classifier_type}_classifier",
-                    "params": {
-                        "image_path": image_path
-                    }
-                })
-        
-        self.logger.info(f"[Classifier] Parsed {len(tool_calls)} tool calls")
-        return tool_calls
-
-    def _extract_agent_result(self, synthesis: str) -> Dict[str, Any]:
-        """Extract agent result from LLM synthesis - Enhanced like detector/VQA."""
-        try:
-            # Enhanced JSON extraction with multiple attempts
-            json_str = None
-            
-            # Method 1: Find first complete JSON object
-            json_start = synthesis.find('{')
-            if json_start >= 0:
-                brace_count = 0
-                json_end = json_start
-                
-                for i, char in enumerate(synthesis[json_start:], json_start):
-                    if char == '{':
-                        brace_count += 1
-                    elif char == '}':
-                        brace_count -= 1
-                        if brace_count == 0:
-                            json_end = i + 1
-                            break
-                
-                if brace_count == 0:  # Found complete JSON
-                    json_str = synthesis[json_start:json_end]
-            
-            # Method 2: Extract between ```json and ``` if exists
-            if not json_str:
-                import re
-                json_block = re.search(r'```json\s*(\{.*?\})\s*```', synthesis, re.DOTALL)
-                if json_block:
-                    json_str = json_block.group(1)
-            
-            # Parse the JSON
-            if json_str:
-                result = json.loads(json_str)
-                self.logger.info(f"[Classifier] Successfully extracted JSON result")
-                return result
-            
-            # Method 3: Fallback - create result from synthesis text
-            self.logger.warning("[Classifier] No JSON found, creating fallback result")
-            
-            # Try to extract class name and confidence from text
-            class_name = "Unknown"
-            confidence = 0.5
-            
-            # Look for class name patterns
-            class_patterns = [
-                r'class[_\s]*name["\s]*:["\s]*([^"\n,]+)',
-                r'classified[:\s]+as[:\s]+([^\n,]+)',
-                r'result[:\s]+([^\n,]+)',
-            ]
-            for pattern in class_patterns:
-                matches = re.findall(pattern, synthesis, re.IGNORECASE)
-                if matches:
-                    class_name = matches[0].strip()
-                    break
-            
-            # Look for confidence patterns
-            conf_patterns = [
-                r'confidence["\s]*:["\s]*([0-9.]+)',
-                r'confidence[:\s]+([0-9.]+)',
-                r'([0-9.]+)%?\s*confidence',
-            ]
-            for pattern in conf_patterns:
-                matches = re.findall(pattern, synthesis, re.IGNORECASE)
-                if matches:
-                    try:
-                        confidence = float(matches[0])
-                        if confidence > 1.0:  # Handle percentage
-                            confidence = confidence / 100.0
+                    obs_data = json.loads(step.observation)
+                    if obs_data.get("success", False):
+                        class_name = obs_data.get("class_name", "Unknown")
+                        confidence = obs_data.get("confidence", 0.0)
+                        all_classes = obs_data.get("all_classes", {})
+                        description = obs_data.get("description", "")
                         break
-                    except:
-                        pass
-            
-            # Create fallback result
-            outcome_key = f"{self.classifier_type}_result"
-            return {
-                outcome_key: {
-                    "success": True,
-                    "class_name": class_name,
-                    "confidence": confidence,
-                    "description": f"Classified as {class_name}",
-                    "analysis": "Generated from LLM synthesis parsing"
-                }
+                except json.JSONDecodeError:
+                    continue
+        
+        # Get the comprehensive analysis from final answer
+        final_analysis = react_result.get("answer", "")
+        
+        # Build structured result
+        classifier_result = {
+            "success": True,
+            "class_name": class_name,
+            "confidence": confidence,
+            "description": description,
+            "all_classes": all_classes,
+            "analysis": final_analysis,
+            "reasoning_steps": len(self.react_history) if hasattr(self, 'react_history') else 0
+        }
+        
+        # Add type-specific insights
+        if self.classifier_type == "modality":
+            classifier_result["clinical_advantages"] = self._get_modality_advantages(class_name)
+            classifier_result["recommended_for"] = self._get_modality_recommendations(class_name)
+        else:  # region
+            classifier_result["anatomical_significance"] = self._get_region_significance(class_name)
+            classifier_result["pathology_risk"] = self._get_region_risk(class_name)
+        
+        return {result_key: classifier_result}
+    
+    # ===== DOMAIN-SPECIFIC HELPERS (từ version cũ) =====
+    
+    def _get_modality_advantages(self, modality: str) -> List[str]:
+        """Get clinical advantages of the imaging modality."""
+        advantages = {
+            "WLI": [
+                "Standard visualization with natural colors",
+                "Good for general screening",
+                "No special equipment required",
+                "Baseline reference for comparison"
+            ],
+            "BLI": [
+                "Enhanced visualization of microvasculature",
+                "Better detection of early neoplastic lesions",
+                "Improved contrast for mucosal patterns",
+                "Superior for characterizing surface irregularities"
+            ],
+            "FICE": [
+                "Digital enhancement without dyes",
+                "Customizable spectral settings",
+                "Good for detecting subtle color differences",
+                "Effective for inflammatory changes"
+            ],
+            "LCI": [
+                "Enhanced color contrast",
+                "Better visualization of inflammation",
+                "Improved polyp detection rates",
+                "Excellent for subtle lesion detection"
+            ]
+        }
+        return advantages.get(modality, ["Standard endoscopic visualization"])
+    
+    def _get_modality_recommendations(self, modality: str) -> List[str]:
+        """Get recommendations for when to use this modality."""
+        recommendations = {
+            "WLI": [
+                "Initial screening examination",
+                "General diagnostic procedures",
+                "When specialized equipment unavailable",
+                "Documentation and comparison baseline"
+            ],
+            "BLI": [
+                "Evaluation of suspicious lesions",
+                "Detailed mucosal assessment",
+                "Characterization of polyps",
+                "Surveillance of high-risk patients"
+            ],
+            "FICE": [
+                "Detection of flat lesions",
+                "Assessment of inflammatory changes",
+                "When chromoendoscopy is needed",
+                "Detailed surface pattern analysis"
+            ],
+            "LCI": [
+                "Screening in high-risk patients",
+                "Detection of subtle lesions",
+                "Evaluation of healing mucosa",
+                "Enhanced adenoma detection"
+            ]
+        }
+        return recommendations.get(modality, ["Consult with endoscopist for optimal technique"])
+    
+    def _get_region_significance(self, region: str) -> str:
+        """Get anatomical significance of the region."""
+        significance = {
+            "Hau_hong": "Entry point of digestive system, important for swallowing function and respiratory interface",
+            "Thuc_quan": "Critical conduit for food transport, common site for reflux disease and Barrett's esophagus",
+            "Tam_vi": "Gastroesophageal junction, prone to inflammation and adenocarcinoma development",
+            "Than_vi": "Main gastric body for acid production and digestion, common site for ulcers and tumors",
+            "Phinh_vi": "Gastric fundus for storage, can develop fundic gland polyps and varices",
+            "Hang_vi": "Gastric antrum, high-risk area for Helicobacter pylori and gastric cancer",
+            "Bo_cong_lon": "Greater curvature, less common site for pathology but important for surgical planning",
+            "Bo_cong_nho": "Lesser curvature, high-risk area for gastric cancer and lymph node involvement",
+            "Hanh_ta_trang": "Duodenal bulb, common site for duodenal ulcers and Brunner's gland hyperplasia",
+            "Ta_trang": "Duodenum proper, important for nutrient absorption and celiac disease manifestation"
+        }
+        return significance.get(region, "Important anatomical region of the gastrointestinal tract")
+    
+    def _get_region_risk(self, region: str) -> Dict[str, str]:
+        """Get pathology risk assessment for the region."""
+        risk_profiles = {
+            "Hau_hong": {
+                "cancer_risk": "Low", 
+                "common_pathology": "Pharyngitis, foreign bodies, reflux changes"
+            },
+            "Thuc_quan": {
+                "cancer_risk": "Moderate", 
+                "common_pathology": "GERD, Barrett's esophagus, squamous cell carcinoma, adenocarcinoma"
+            },
+            "Tam_vi": {
+                "cancer_risk": "Moderate-High", 
+                "common_pathology": "Carditis, intestinal metaplasia, adenocarcinoma"
+            },
+            "Than_vi": {
+                "cancer_risk": "Moderate", 
+                "common_pathology": "Gastritis, peptic ulcers, MALT lymphoma, adenocarcinoma"
+            },
+            "Phinh_vi": {
+                "cancer_risk": "Low", 
+                "common_pathology": "Fundic gland polyps, portal hypertensive gastropathy, varices"
+            },
+            "Hang_vi": {
+                "cancer_risk": "High", 
+                "common_pathology": "H. pylori gastritis, intestinal metaplasia, adenoma, adenocarcinoma"
+            },
+            "Bo_cong_lon": {
+                "cancer_risk": "Low-Moderate", 
+                "common_pathology": "Gastric ulcers, GIST, lymphoma"
+            },
+            "Bo_cong_nho": {
+                "cancer_risk": "High", 
+                "common_pathology": "Gastric ulcers, adenocarcinoma, lymph node metastases"
+            },
+            "Hanh_ta_trang": {
+                "cancer_risk": "Low", 
+                "common_pathology": "Duodenal ulcers, Brunner's gland hyperplasia, duodenitis"
+            },
+            "Ta_trang": {
+                "cancer_risk": "Low", 
+                "common_pathology": "Duodenitis, celiac disease, adenocarcinoma (rare)"
             }
-            
-        except json.JSONDecodeError as e:
-            self.logger.error(f"[Classifier] JSON decode error: {str(e)}")
-            self.logger.error(f"[Classifier] Attempted to parse: {json_str}")
-            
-            # Fallback result
-            outcome_key = f"{self.classifier_type}_result"
-            return {
-                outcome_key: {
-                    "success": False,
-                    "error": f"JSON parsing failed: {str(e)}",
-                    "analysis": synthesis
-                }
-            }
-        except Exception as e:
-            self.logger.error(f"[Classifier] Failed to extract agent result: {str(e)}")
-            outcome_key = f"{self.classifier_type}_result"
-            return {
-                outcome_key: {
-                    "success": False,
-                    "error": str(e),
-                    "analysis": synthesis
-                }
-            }
+        }
+        return risk_profiles.get(region, {
+            "cancer_risk": "Variable", 
+            "common_pathology": "Various gastrointestinal conditions"
+        })

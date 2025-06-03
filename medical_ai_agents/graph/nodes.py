@@ -306,7 +306,7 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
     # === ADD PERFORMANCE METRICS ===
     if "start_time" in state:
         final_result["processing_time"] = time.time() - state["start_time"]
-
+    logger.info(f"Final result: {final_result}")
     logger.info("Simplified result synthesis complete")
     
     return {**state, "final_result": final_result}

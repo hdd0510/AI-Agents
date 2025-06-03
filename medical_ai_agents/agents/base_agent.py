@@ -1,271 +1,174 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-"""
-Medical AI Agents - Base Agent (FIXED: Synthesis with Query Context)
------------------------------
-Định nghĩa lớp cơ sở mới cho các agents trong hệ thống AI y tế.
-"""
-
+from __future__ import annotations
+import json, logging, re, traceback
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, List, Type
-import logging
-import os
-from PIL import Image
-import json
-
-from langchain.schema import HumanMessage, SystemMessage
+from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
+from langchain.callbacks.base import BaseCallbackHandler
+from langchain.schema import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-
 from medical_ai_agents.tools.base_tools import BaseTool
 
+class ThoughtType(str, Enum):
+    INITIAL = "initial"
+    REASONING = "reasoning"
+    OBSERVATION = "observation"
+    CONCLUSION = "conclusion"
+
+@dataclass
+class ReActStep:
+    thought: str
+    thought_type: ThoughtType
+    action: Optional[str] = None
+    action_input: Optional[Dict[str, Any]] = None
+    observation: Optional[str] = None
+    timestamp: str = datetime.now().isoformat()
+
+class ReActCallbackHandler(BaseCallbackHandler):
+    def __init__(self, agent_name: str):
+        self.logger = logging.getLogger(f"react.{agent_name}")
+    def on_llm_start(self, *_, **__):
+        self.logger.debug("LLM start")
+    def on_llm_end(self, *_, **__):
+        self.logger.debug("LLM end")
+
 class BaseAgent(ABC):
-    """Lớp cơ sở cho tất cả các agents với LLM controller."""
-    
     def __init__(self, name: str, llm_model: str = "gpt-4o-mini", device: str = "cuda"):
-        """Khởi tạo Base Agent với LLM controller."""
         self.name = name
         self.device = device
         self.logger = logging.getLogger(f"agent.{self.name.lower().replace(' ', '_')}")
         self.initialized = False
-        
-        # Initialize LLM controller
-        self.llm = ChatOpenAI(model=llm_model, temperature=0.5)
-        self.tools = self._register_tools()
-        self.system_prompt = self._get_system_prompt()
-    
+        self.callback_handler = ReActCallbackHandler(self.name)
+        self.llm = ChatOpenAI(model=llm_model, temperature=0.5, callbacks=[self.callback_handler])
+        self.tools: List[BaseTool] = self._register_tools()
+        self.tool_descriptions = self._get_tool_descriptions()
+        self.max_iterations = 10
+        self.react_history: List[ReActStep] = []
+
     @abstractmethod
     def _register_tools(self) -> List[BaseTool]:
-        """Register tools available to this agent."""
-        pass
-    
+        ...
     @abstractmethod
-    def _get_system_prompt(self) -> str:
-        """Get the system prompt that defines this agent's role."""
-        pass
-    
+    def _get_agent_description(self) -> str:
+        ...
     @abstractmethod
     def initialize(self) -> bool:
-        """Khởi tạo agent, load model và các tài nguyên cần thiết."""
-        pass
-    
-    def load_image(self, image_path: str) -> Optional[Image.Image]:
-        """Load hình ảnh từ đường dẫn."""
-        try:
-            if not os.path.exists(image_path):
-                self.logger.error(f"Image not found: {image_path}")
-                return None
-            
-            image = Image.open(image_path).convert("RGB")
-            return image
-        except Exception as e:
-            self.logger.error(f"Failed to load image: {str(e)}")
-            return None
-    
-    def execute_tool(self, tool_name: str, **kwargs) -> Dict[str, Any]:
-        """Execute a specific tool by name."""
-        self.logger.info(f"Executing tool: {tool_name} with parameters: {json.dumps(kwargs, indent=2)}")
-        
-        for tool in self.tools:
-            if tool.name == tool_name:
-                try:
-                    result = tool(**kwargs)
-                    self.logger.info(f"Tool {tool_name} execution result: {json.dumps(result, indent=2)}")
-                    return result
-                except Exception as e:
-                    self.logger.error(f"Error executing tool {tool_name}: {str(e)}")
-                    return {"success": False, "error": f"Tool execution failed: {str(e)}"}
-        
-        return {"success": False, "error": f"Tool '{tool_name}' not found"}
-    
-    def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Xử lý state và trả về state mới với kết quả của agent."""
-        try:
-            # Ensure initialized
-            if not self.initialized:
-                success = self.initialize()
-                if not success:
-                    return {**state, "error": f"Failed to initialize {self.name}"}
-            
-            # Process state
-            return self._process_state(state)
-            
-        except Exception as e:
-            import traceback
-            error_msg = f"Error in {self.name}: {str(e)}\n{traceback.format_exc()}"
-            self.logger.error(error_msg)
-            return {**state, "error": error_msg}
-    
-    def _process_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Process state using LLM controller and tools."""
-        # Extract relevant information from state
-        task_input = self._extract_task_input(state)
-        self.logger.info(f"Task input: {json.dumps(task_input, indent=2)}")
-        
-        # Let LLM decide which tools to use and how
-        messages = [
-            SystemMessage(content=self.system_prompt),
-            HumanMessage(content=self._format_task_input(task_input))
-        ]
-        
-        # Get response from LLM
-        response = self.llm.invoke(messages)
-        plan = response.content
-        self.logger.info(f"LLM plan: {plan}")
-        
-        # Parse the plan and execute tools
-        tool_calls = self._parse_tool_calls(plan)
-        self.logger.info(f"Parsed tool calls: {json.dumps(tool_calls, indent=2)}")
-        
-        results = {}
-        tool_outputs = {}  # Store outputs from each tool
-        
-        for tool_call in tool_calls:
-            tool_name = tool_call.get("tool_name")
-            params = tool_call.get("params", {})
-            
-            if tool_name:
-                self.logger.info(f"Processing tool call: {tool_name}")
-                self.logger.info(f"Initial parameters: {json.dumps(params, indent=2)}")
-                
-                # If this is visualize_detections and we have yolo_detection results
-                if tool_name == "visualize_detections" and "yolo_detection" in tool_outputs:
-                    yolo_result = tool_outputs["yolo_detection"]
-                    self.logger.info(f"Found yolo_detection results: {json.dumps(yolo_result, indent=2)}")
-                    
-                    if yolo_result.get("success", False):
-                        # Use the detections from yolo_detection
-                        params["detections"] = yolo_result.get("objects", [])
-                        self.logger.info(f"Updated parameters with detections: {json.dumps(params, indent=2)}")
-                    else:
-                        self.logger.warning("yolo_detection did not succeed, skipping detections")
-                
-                # Execute the tool
-                tool_result = self.execute_tool(tool_name, **params)
-                results[tool_name] = tool_result
-                tool_outputs[tool_name] = tool_result
-                self.logger.info(f"Tool {tool_name} completed with result: {json.dumps(tool_result, indent=2)}")
-        
-        # FIXED: Let LLM synthesize final result WITH task input context
-        synthesis_message = [
-            SystemMessage(content=self.system_prompt),
-            HumanMessage(content=f"""Task context:
-Query: "{task_input.get('query', 'No specific query')}"
-Image path: {task_input.get('image_path', 'No image')}
-Is text-only: {task_input.get('is_text_only', False)}
-Medical context: {json.dumps(task_input.get('medical_context', {}), indent=2)}
-
-Tool execution results:
-{json.dumps(results, indent=2)}
-
-{self._format_synthesis_input()}""")
-        ]
-        synthesis_response = self.llm.invoke(synthesis_message)
-        
-        # Return agent result
-        agent_result = self._extract_agent_result(synthesis_response.content)
-        return {**state, **agent_result}
-    
+        ...
     @abstractmethod
     def _extract_task_input(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract task-specific input from state."""
-        pass
-    
-    @abstractmethod
-    def _format_synthesis_input(self) -> str:
-        """Format synthesis input for LLM prompt."""
-        pass
-
+        ...
     @abstractmethod
     def _format_task_input(self, task_input: Dict[str, Any]) -> str:
-        """Format task input for LLM prompt."""
-        pass
-    
-    def _parse_tool_calls(self, plan: str) -> List[Dict[str, Any]]:
-        """Enhanced parsing for tool calls with better error handling."""
-        tool_calls = []
-        
-        # Method 1: Standard format parsing
-        lines = plan.split("\n")
-        current_tool = None
-        current_params = {}
-        
-        for line in lines:
-            line_stripped = line.strip()
-            if line_stripped.startswith("Tool:"):
-                # Save previous tool if exists
-                if current_tool:
-                    tool_calls.append({
-                        "tool_name": current_tool,
-                        "params": current_params
-                    })
-                
-                # Start new tool
-                current_tool = line_stripped.replace("Tool:", "").strip()
-                current_params = {}
-            
-            elif line_stripped.startswith("Parameters:"):
-                # Try to parse JSON parameters
-                try:
-                    params_text = line_stripped.replace("Parameters:", "").strip()
-                    
-                    # Handle both single line and multiline JSON
-                    if params_text.startswith("{"):
-                        # Try to find complete JSON
-                        json_str = params_text
-                        if not params_text.endswith("}"):
-                            # Look for closing brace in subsequent lines
-                            line_idx = lines.index(line)
-                            for next_line in lines[line_idx + 1:]:
-                                json_str += " " + next_line.strip()
-                                if "}" in next_line:
-                                    break
-                        
-                        current_params = json.loads(json_str)
-                        
-                except (json.JSONDecodeError, ValueError) as e:
-                    self.logger.warning(f"Failed to parse parameters: {line_stripped}, error: {e}")
-                    current_params = {}
-        
-        # Add last tool
-        if current_tool:
-            tool_calls.append({
-                "tool_name": current_tool,
-                "params": current_params
-            })
-        
-        # Method 2: Regex extraction as fallback
-        if not tool_calls:
-            import re
-            
-            # Look for tool patterns
-            tool_pattern = r'Tool:\s*(\w+)'
-            param_pattern = r'Parameters:\s*(\{[^}]*\})'
-            
-            tools = re.findall(tool_pattern, plan)
-            params = re.findall(param_pattern, plan, re.DOTALL)
-            
-            for i, tool in enumerate(tools):
-                param_dict = {}
-                if i < len(params):
-                    try:
-                        param_dict = json.loads(params[i])
-                    except:
-                        pass
-                
-                tool_calls.append({
-                    "tool_name": tool,
-                    "params": param_dict
-                })
-        
-        self.logger.info(f"Parsed {len(tool_calls)} tool calls")
-        return tool_calls
-    
+        ...
     @abstractmethod
+    def _format_agent_result(self, react_result: Dict[str, Any]) -> Dict[str, Any]:
+        ...
+
+    def _get_system_prompt(self) -> str:
+        return (
+            f"You are {self.name}, an expert medical AI agent using the ReAct pattern.\n\n"
+            f"{self._get_agent_description()}\n\n"
+            f"Available tools:\n{self.tool_descriptions}\n\n"
+            "Rules:\n"
+            "1. Begin each step with 'Thought:' then 'Action:' then 'Action Input:' if needed.\n"
+            "2. Use tool name exactly or 'Final Answer'.\n"
+            "3. Continue until action is 'Final Answer'."
+        )
+
+    def _format_synthesis_input(self) -> str:
+        return "Summarise findings in 150 words."
+
     def _extract_agent_result(self, synthesis: str) -> Dict[str, Any]:
-        """Extract agent result from LLM synthesis."""
-        pass
-    
+        try:
+            data = json.loads(synthesis)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+        return {"answer": synthesis}
+
+    def _get_tool_descriptions(self) -> str:
+        if not self.tools:
+            return "None"
+        out = []
+        for t in self.tools:
+            schema = t.get_parameters_schema()
+            params = [f"  - {p} ({meta.get('type','any')})" for p, meta in schema.items()]
+            out.append(f"- {t.name}:\n" + "\n".join(params))
+        return "\n".join(out)
+
+    def _parse_llm_response(self, txt: str) -> Tuple[Optional[str], Optional[str], Optional[Dict[str, Any]]]:
+        thought = re.search(r"Thought:\s*(.+?)(?=Action:|$)", txt, re.DOTALL)
+        action = re.search(r"Action:\s*(.+?)(?=Action Input:|$)", txt, re.DOTALL)
+        a_input = re.search(r"Action Input:\s*(\{.+?\})", txt, re.DOTALL)
+        thought_val = thought.group(1).strip() if thought else None
+        action_val = action.group(1).strip() if action else None
+        try:
+            input_val = json.loads(a_input.group(1)) if a_input else None
+        except Exception:
+            input_val = None
+        return thought_val, action_val, input_val
+
+    def _execute_tool(self, name: str, params: Dict[str, Any]) -> str:
+        tool = next((t for t in self.tools if t.name == name), None)
+        if not tool:
+            return f"Error: tool '{name}' not found."
+        try:
+            res = tool(**params)
+            return json.dumps(res, ensure_ascii=False, indent=2) if isinstance(res, dict) else str(res)
+        except Exception as e:
+            return f"Error executing {name}: {e}"
+
+    def _create_react_messages(self, task_input: Dict[str, Any]) -> List[Any]:
+        msgs = [SystemMessage(content=self._get_system_prompt()), HumanMessage(content=self._format_task_input(task_input))]
+        if self.react_history:
+            hist = []
+            for s in self.react_history[-5:]:
+                hist.append(f"Thought: {s.thought}\nAction: {s.action}\nAction Input: {json.dumps(s.action_input)}\nObservation: {s.observation[:120] if s.observation else ''}")
+            msgs.append(AIMessage(content="\n".join(hist)))
+        return msgs
+
+    def _run_react_loop(self, task_input: Dict[str, Any]) -> Dict[str, Any]:
+        self.react_history = []
+        for i in range(1, self.max_iterations + 1):
+            resp = self.llm.invoke(self._create_react_messages(task_input)).content
+            t, a, inp = self._parse_llm_response(resp)
+            if not t or not a:
+                continue
+            step = ReActStep(thought=t, thought_type=ThoughtType.INITIAL if i == 1 else ThoughtType.REASONING, action=a, action_input=inp)
+            if a.lower() == "final answer":
+                step.thought_type = ThoughtType.CONCLUSION
+                self.react_history.append(step)
+                answer = inp.get("answer") if inp else t
+                return {"success": True, "answer": answer, "history": self._serialize_history()}
+            obs = self._execute_tool(a, inp or {})
+            step.observation = obs
+            step.thought_type = ThoughtType.OBSERVATION
+            self.react_history.append(step)
+            task_input[f"obs_{i}"] = obs
+        return {"success": False, "error": "Max iterations reached", "history": self._serialize_history()}
+
+    def _serialize_history(self) -> List[Dict[str, Any]]:
+        return [{"thought": s.thought, "action": s.action, "observation": s.observation} for s in self.react_history]
+
+    def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            if not self.initialized:
+                self.initialized = self.initialize()
+                if not self.initialized:
+                    return {**state, "error": f"Init {self.name} failed"}
+            task_input = self._extract_task_input(state)
+            result = self._run_react_loop(task_input)
+            agent_out = self._format_agent_result(result)
+            return {**state, **agent_out}
+        except Exception as e:
+            err = f"Error in {self.name}: {e}\n{traceback.format_exc()}"
+            self.logger.error(err)
+            return {**state, "error": err}
+
     def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Make the agent callable for LangGraph."""
         return self.process(state)
