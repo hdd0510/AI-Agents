@@ -79,9 +79,6 @@ class BaseAgent(ABC):
             "3. Continue until action is 'Final Answer'."
         )
 
-    def _format_synthesis_input(self) -> str:
-        return "Summarise findings in 150 words."
-
     def _extract_agent_result(self, synthesis: str) -> Dict[str, Any]:
         try:
             data = json.loads(synthesis)
@@ -164,6 +161,7 @@ class BaseAgent(ABC):
             task_input = self._extract_task_input(state)
             result = self._run_react_loop(task_input)
             agent_out = self._format_agent_result(result)
+            print(agent_out)
             return {**state, **agent_out}
         except Exception as e:
             err = f"Error in {self.name}: {e}\n{traceback.format_exc()}"

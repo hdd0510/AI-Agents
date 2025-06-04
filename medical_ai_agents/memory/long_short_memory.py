@@ -213,7 +213,6 @@ class MedicalAIChatbot:
         """Khởi tạo Medical AI System."""
         config = MedicalGraphConfig(
             device="cuda" if os.environ.get("CUDA_AVAILABLE") else "cpu",
-            use_reflection=True
         )
         return MedicalAISystem(config)
     
