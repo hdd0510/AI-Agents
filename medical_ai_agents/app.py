@@ -180,90 +180,35 @@ def create_enhanced_chatbot():
                 has_image = image is not None
                 
                 if has_image:
-                    # =============  IMAGE ANALYSIS WORKFLOW =============
-                    logger.info(f"Processing image analysis for user {username}")
-                    
-                    history[-1][1] = "🔍 Đang phân tích hình ảnh..."
-                    yield "", history, session_state
-                    time.sleep(0.5)
-                    
-                    history[-1][1] = "⚙️ Chạy AI detection..."
-                    yield "", history, session_state
-                    
-                    result = self.medical_ai.analyze(
-                        image_path=image,
-                        query=message,
-                        medical_context={"user_context": context} if context else None
-                    )
+                    result = self.medical_ai.analyze(image_path=image, query=message)
                     
                     if result.get("success", False):
-                        # Stream response parts
-                        history[-1][1] = "📝 Đang tạo báo cáo..."
-                        yield "", history, session_state
-                        time.sleep(0.3)
+                        response_parts = [f"🔍 **Analysis Results:**\n{result.get('final_answer', '')}"]
                         
-                        # Create comprehensive response
-                        if "final_answer" in result:
-                            final_answer = result["final_answer"]
-                            streaming_text = "🔍 **Kết quả phân tích hình ảnh:**\n\n"
-                            
-                            # Stream the final answer word by word
-                            words = final_answer.split()
-                            for i, word in enumerate(words):
-                                streaming_text += word + " "
-                                if i % 5 == 0:  # Update every 5 words
-                                    history[-1][1] = streaming_text + "..."
-                                    yield "", history, session_state
-                                    time.sleep(0.1)
-                            
-                            response_parts = [streaming_text.rstrip()]
-                        
-                        # Add detection details and visualization if available
+                        # FIXED: Check for visualization in agent_results
                         if "agent_results" in result and "detector_result" in result["agent_results"]:
                             detector = result["agent_results"]["detector_result"]
-                            if detector.get("success") and detector.get("count", 0) > 0:
-                                detection_info = f"\n\n📊 **Chi tiết phát hiện:**\n"
-                                detection_info += f"- Số lượng polyp: {detector['count']}\n"
-                                detection_info += f"- Độ tin cậy: {detector['objects'][0]['confidence']:.2%}\n"
+                            
+                            if detector.get("visualization_available") and detector.get("visualization_base64"):
+                                # Create proper HTML img tag
+                                img_b64 = detector["visualization_base64"]
+                                img_html = f'''
+        <div style="margin: 10px 0; text-align: center;">
+            <p><strong>🎯 Visualization Result:</strong></p>
+            <img src="data:image/png;base64,{img_b64}" 
+                alt="Polyp Detection Results" 
+                style="max-width: 100%; height: auto; border-radius: 8px; 
+                        box-shadow: 0 2px 8px rgba(0,0,0,0.1); border: 1px solid #ddd;">
+        </div>'''
+                                response_parts.append(img_html)
                                 
-                                response_parts.append(detection_info)
-                                
-                                current_response = "\n".join(response_parts)
-                                history[-1][1] = current_response
-                                yield "", history, session_state
-                                time.sleep(0.5)
-                                
-                                # Add visualization if available
-                                if detector.get("visualization_base64") and detector.get("visualization_available"):
-                                    session_state["last_visualization"] = detector.get("visualization_base64")
-                                    img_data_url = f"data:image/png;base64,{detector.get('visualization_base64')}"
-                                    viz_html = f'\n\n📊 **Kết quả phát hiện polyp:**\n<img src="{img_data_url}" alt="Kết quả phát hiện polyp" style="max-width: 100%; height: auto; border-radius: 8px; margin: 10px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">'
-                                    response_parts.append(viz_html)
-                                    
-                                    current_response = "\n".join(response_parts)
-                                    history[-1][1] = current_response
-                                    yield "", history, session_state
-                                    time.sleep(0.5)
-                                    
-                                    session_state["has_image_result"] = True
-                                    session_state["last_result_image_data"] = img_data_url
+                                # Also save to session state for separate display
+                                session_state["last_visualization"] = img_b64
                         
-                        # Add medical recommendations
-                        recommendations = "\n\n💡 **Khuyến nghị:**\n"
-                        if result.get("polyp_count", 0) > 0:
-                            recommendations += "- Nên tham khảo ý kiến bác sĩ chuyên khoa\n"
-                            recommendations += "- Theo dõi định kỳ theo lịch hẹn"
-                        else:
-                            recommendations += "- Duy trì lối sống lành mạnh\n"
-                            recommendations += "- Kiểm tra định kỳ theo khuyến nghị"
-                        
-                        response_parts.append(recommendations)
-                        
-                        # Final response
-                        final_response = "\n".join(response_parts)
+                        final_response = "\n\n".join(response_parts)
                         history[-1][1] = final_response
                         yield "", history, session_state
-                        
+                                
                     else:
                         error_response = "❌ Có lỗi trong quá trình phân tích hình ảnh.\n"
                         error_response += f"Chi tiết lỗi: {result.get('error', 'Unknown error')}"
@@ -589,6 +534,9 @@ def create_enhanced_chatbot():
                 def safe_process_message_streaming(message, image, history, username, user_info, state):
                     """Wrapper cho streaming function."""
                     try:
+                        # Đảm bảo state luôn là dict
+                        if state is None:
+                            state = {}
                         # Add user info to medical context
                         if user_info.strip():
                             if "medical_context" not in state:

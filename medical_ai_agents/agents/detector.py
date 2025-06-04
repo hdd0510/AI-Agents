@@ -47,16 +47,11 @@ class DetectorAgent(BaseAgent):
         return [self.detector_tool, self.visualize_tool]
     
     def _get_agent_description(self) -> str:
-        """Get agent description for ReAct system prompt."""
-        return """Bạn là chuyên gia phát hiện polyp trong hình ảnh nội soi tiêu hóa.
-        
-Chuyên môn của bạn:
-- Phân tích hình ảnh nội soi để phát hiện polyp
-- Đánh giá vị trí, kích thước và đặc điểm của polyp
-- Tạo visualization với bounding boxes để minh họa kết quả
-- Cung cấp nhận định y khoa chuyên sâu về các phát hiện
-
-Bạn sử dụng công nghệ YOLO để phát hiện chính xác và có thể tạo hình ảnh minh họa khi cần thiết."""
+        return """I am a polyp detection specialist using YOLO technology.
+My workflow:
+1. Use yolo_detection to find polyps
+2. Use visualize_detections to create visual results (if polyps found)
+3. Provide medical assessment"""
 
     def _get_system_prompt(self) -> str:
         """Get system prompt theo pattern simplified."""
@@ -162,54 +157,46 @@ Luồng làm việc:
         return tool_calls
 
     def _format_agent_result(self, react_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Format final agent result từ ReAct execution với đầy đủ thông tin."""
+        """Extract results from ReAct execution."""
         if not react_result.get("success"):
             return {
                 "detector_result": {
                     "success": False,
                     "error": react_result.get("error", "Detection failed"),
-                    "reasoning_steps": len(self.react_history) if hasattr(self, 'react_history') else 0,
+                    "steps_used": react_result.get("steps_used", 0)
                 }
             }
         
-        # Extract detection results từ ReAct history hoặc direct result
+        # Extract detection data from history
         objects = []
         count = 0
         visualization_base64 = None
-        visualization_available = False
         
-        # Try to get from react_history first
-        if hasattr(self, 'react_history') and self.react_history:
-            for step in self.react_history:
-                if step.observation and "yolo_detection" in str(step.action):
-                    try:
-                        obs_data = json.loads(step.observation)
-                        if obs_data.get("success", False):
-                            objects = obs_data.get("objects", [])
-                            count = obs_data.get("count", len(objects))
-                            break
-                    except Exception:
-                        continue
-                        
-                # Check for visualization result
-                if step.observation and "visualize_detections" in str(step.action):
-                    try:
-                        obs_data = json.loads(step.observation)
-                        if obs_data.get("success", False):
-                            visualization_base64 = obs_data.get("visualization_base64")
-                            visualization_available = True
-                    except Exception:
-                        continue
-        
-        # Build analysis from answer
-        analysis = react_result.get("answer", "Completed polyp detection analysis.")
+        for step in self.react_history:
+            if step.observation and "yolo_detection" in str(step.action):
+                try:
+                    obs_data = json.loads(step.observation)
+                    if obs_data.get("success", False):
+                        objects = obs_data.get("objects", [])
+                        count = obs_data.get("count", len(objects))
+                except:
+                    continue
+                    
+            elif step.observation and "visualize_detections" in str(step.action):
+                try:
+                    obs_data = json.loads(step.observation)
+                    if obs_data.get("success", False):
+                        visualization_base64 = obs_data.get("visualization_base64")
+                except:
+                    continue
         
         result = {
             "success": True,
             "count": count,
             "objects": objects,
-            "analysis": analysis,
-            "visualization_available": visualization_available,
+            "analysis": react_result.get("answer", "Polyp detection completed"),
+            "steps_used": react_result.get("steps_used", 0),
+            "visualization_available": visualization_base64 is not None
         }
         
         if visualization_base64:
