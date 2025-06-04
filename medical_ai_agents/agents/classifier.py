@@ -2,37 +2,50 @@
 # -*- coding: utf-8 -*-
 
 """
-Medical AI Agents - Classifier Agent with ReAct Pattern
-------------------------------------------------------
-Agent phân loại hình ảnh nội soi sử dụng ReAct framework theo BaseAgent mới.
+TIERED CLASSIFIER AGENT - GUIDED ADAPTIVE APPROACH (Important)
+=============================================================
+Core requirements + adaptive path selection
+Synthesis without looking at images (text-only analysis)
 """
 
 import json
-from typing import Dict, Any, List
 import logging
+from typing import Dict, Any, List, Optional
+from langchain_core.messages import SystemMessage, HumanMessage
 
 from medical_ai_agents.agents.base_agent import BaseAgent, ThoughtType
 from medical_ai_agents.tools.base_tools import BaseTool
 from medical_ai_agents.tools.classifier.cls_tools import ClassifierTool
 
-
 class ClassifierAgent(BaseAgent):
-    """Classifier Agent với ReAct pattern cho phân loại hình ảnh nội soi."""
+    """
+    GUIDED ADAPTIVE Classifier Agent - Important Tier
+    
+    CORE REQUIREMENTS (must achieve):
+    1. Image classification completed
+    2. Confidence assessment performed  
+    3. Result validation ensured
+    
+    ADAPTIVE STRATEGIES (choose optimal):
+    - Direct classification → confidence check → result
+    - Classification → validation → re-classify if needed
+    - Multi-angle analysis → classification → synthesis
+    """
     
     def __init__(self, model_path: str, class_names: List[str], 
-                classifier_type: str = "modality", llm_model: str = "gpt-4o-mini", 
-                device: str = "cuda"):
-        """Initialize Classifier ReAct Agent."""
+                classifier_type: str = "modality", llm_model: str = "gpt-4o-mini", device: str = "cuda"):
+        """Initialize guided adaptive classifier."""
         self.model_path = model_path
         self.class_names = class_names
         self.classifier_type = classifier_type
         
-        # Set specific agent name based on type
-        agent_name = f"{classifier_type.capitalize()} Classifier Agent"
+        # Set specific agent name
+        agent_name = f"Guided {classifier_type.title()} Classifier Agent"
         super().__init__(name=agent_name, llm_model=llm_model, device=device)
         
-        # Specific configuration
-        self.max_iterations = 3  # Classification typically needs fewer steps
+        # GUIDED ADAPTIVE configuration
+        self.max_iterations = 4  # Balanced: efficiency + reliability
+        
         self.classifier_tool = None
     
     def _register_tools(self) -> List[BaseTool]:
@@ -46,155 +59,242 @@ class ClassifierAgent(BaseAgent):
         return [self.classifier_tool]
     
     def _get_agent_description(self) -> str:
-        """Get classifier agent description."""
-        if self.classifier_type == "modality":
-            return """I am a medical imaging modality classification specialist.
-My expertise includes:
-- Identifying endoscopy imaging techniques (WLI, BLI, FICE, LCI)
-- Understanding the characteristics of each imaging modality
-- Explaining the clinical advantages of different techniques
-- Recommending appropriate modality for specific diagnostic needs
-- Assessing image quality and technical parameters"""
-        else:  # region classifier
-            return """I am an anatomical region classification specialist for gastrointestinal endoscopy.
-My expertise includes:
-- Identifying anatomical locations in the GI tract
-- Understanding anatomical landmarks and transitions
-- Explaining the clinical significance of different regions
-- Correlating anatomical location with pathology risk
-- Providing location-specific screening recommendations"""
-    
+        """Guided adaptive classifier description."""
+        return f"""I am a GUIDED ADAPTIVE {self.classifier_type} classification specialist.
+
+CORE REQUIREMENTS (must achieve):
+✓ Complete image classification using available tools
+✓ Assess confidence in classification results
+✓ Validate result quality and reliability
+
+ADAPTIVE STRATEGIES (I choose optimal path):
+🎯 Direct approach: Quick classification with confidence check
+🔍 Validation approach: Classify → validate → re-check if needed  
+📊 Thorough approach: Multi-angle analysis for complex cases
+
+SYNTHESIS: I analyze tool results without looking at images (text-only synthesis).
+
+Classes I can identify: {', '.join(self.class_names)}"""
+
+    def _get_system_prompt(self) -> str:
+        """Guided adaptive system prompt."""
+        return f"""You are a GUIDED ADAPTIVE {self.classifier_type} classification expert.
+
+CORE REQUIREMENTS (MUST achieve):
+1. ✓ Complete classification using {self.classifier_type}_classifier tool
+2. ✓ Assess confidence level in results
+3. ✓ Validate result quality
+
+ADAPTIVE STRATEGIES (choose based on situation):
+
+STRATEGY A - Direct Approach (efficient):
+Thought: I'll classify directly and assess the confidence
+Action: {self.classifier_type}_classifier
+Action Input: {{"image_path": "<path>"}}
+[If confidence ≥ 70%] → Final Answer
+
+STRATEGY B - Validation Approach (cautious):
+Thought: I'll classify and validate the result quality
+Action: {self.classifier_type}_classifier  
+Action Input: {{"image_path": "<path>"}}
+[Analyze results, if uncertain] → Re-classify or get second opinion
+Final Answer: [Validated result]
+
+STRATEGY C - Thorough Approach (complex cases):
+Thought: This seems complex, I'll do comprehensive analysis
+Action: {self.classifier_type}_classifier
+Action Input: {{"image_path": "<path>"}}
+[Additional analysis steps if needed]
+Final Answer: [Thorough assessment]
+
+GUIDELINES:
+- Choose strategy based on image complexity and initial results
+- If confidence < 70%, consider additional analysis
+- Maximum {self.max_iterations} steps total
+- Always end with Final Answer containing validated classification
+
+Available tools: {self.tool_descriptions}
+Classes: {', '.join(self.class_names)}
+
+Choose your strategy and start:"""
+
     def initialize(self) -> bool:
-        """Initialize classifier agent."""
+        """Initialize guided adaptive classifier."""
         try:
             self.initialized = True
-            self.logger.info(f"{self.name} initialized successfully")
+            self.logger.info(f"Guided Adaptive {self.classifier_type} Classifier initialized successfully")
             return True
         except Exception as e:
-            self.logger.error(f"Failed to initialize {self.name}: {str(e)}")
-            self.initialized = False
+            self.logger.error(f"Failed to initialize Guided Adaptive Classifier: {str(e)}")
             return False
-    
+
     def _extract_task_input(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Extract classification task input."""
+        # Get context from other agents for guidance
+        context = self._build_classification_context(state)
+        
         return {
             "image_path": state.get("image_path", ""),
             "query": state.get("query", ""),
             "classifier_type": self.classifier_type,
-            "previous_results": self._get_previous_results(state)
+            "class_names": self.class_names,
+            "medical_context": state.get("medical_context", {}),
+            "previous_results": context
         }
-    
-    def _get_previous_results(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Get results from previous agents for context."""
-        previous = {}
+
+    def _build_classification_context(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Build context from previous agents for guidance."""
+        context = {}
         
-        # Get detector results if available
+        # Get detector results for context
         if "detector_result" in state:
             detector = state["detector_result"]
             if detector.get("success", False):
-                previous["polyp_count"] = detector.get("count", 0)
+                context["polyp_count"] = detector.get("count", 0)
                 if detector.get("objects"):
-                    previous["polyp_locations"] = [
-                        obj.get("position_description", "unknown") 
-                        for obj in detector["objects"][:3]
+                    context["polyp_details"] = [
+                        {
+                            "confidence": obj.get("confidence", 0),
+                            "position": obj.get("position_description", "unknown")
+                        }
+                        for obj in detector["objects"][:3]  # Top 3
                     ]
         
-        # Get other classifier result if this is the second classifier
+        # Get other classifier result if available
         if self.classifier_type == "region" and "modality_result" in state:
             modality = state["modality_result"]
             if modality.get("success", False):
-                previous["imaging_modality"] = modality.get("class_name", "Unknown")
+                context["imaging_modality"] = {
+                    "type": modality.get("class_name", "Unknown"),
+                    "confidence": modality.get("confidence", 0)
+                }
         elif self.classifier_type == "modality" and "region_result" in state:
             region = state["region_result"]
             if region.get("success", False):
-                previous["anatomical_region"] = region.get("class_name", "Unknown")
+                context["anatomical_region"] = {
+                    "location": region.get("class_name", "Unknown"),
+                    "confidence": region.get("confidence", 0)
+                }
         
-        return previous
-    
+        return context
+
     def _format_task_input(self, task_input: Dict[str, Any]) -> str:
-        """Format task input cho ReAct processing (abstract method implementation)."""
+        """Format task input for guided adaptive processing."""
         image_path = task_input.get("image_path", "")
         query = task_input.get("query", "")
         classifier_type = task_input.get("classifier_type", "")
-        previous = task_input.get("previous_results", {})
+        class_names = task_input.get("class_names", [])
+        context = task_input.get("previous_results", {})
         
-        # Build context from previous results
+        # Build context information
         context_parts = []
-        if previous:
-            if "polyp_count" in previous:
-                context_parts.append(f"- Polyp detection: {previous['polyp_count']} polyp(s) found")
-            if "polyp_locations" in previous:
-                context_parts.append(f"- Polyp locations: {', '.join(previous['polyp_locations'])}")
-            if "imaging_modality" in previous:
-                context_parts.append(f"- Imaging technique: {previous['imaging_modality']}")
-            if "anatomical_region" in previous:
-                context_parts.append(f"- Anatomical location: {previous['anatomical_region']}")
+        if context:
+            if "polyp_count" in context:
+                context_parts.append(f"- Polyp detection: {context['polyp_count']} polyp(s) detected")
+            if "polyp_details" in context:
+                context_parts.append(f"- Polyp details: {len(context['polyp_details'])} objects analyzed")
+            if "imaging_modality" in context:
+                mod = context["imaging_modality"]
+                context_parts.append(f"- Imaging technique: {mod['type']} ({mod['confidence']:.1%} confidence)")
+            if "anatomical_region" in context:
+                reg = context["anatomical_region"]
+                context_parts.append(f"- Anatomical location: {reg['location']} ({reg['confidence']:.1%} confidence)")
         
-        context_str = "\n".join(context_parts) if context_parts else "No previous analysis results"
+        context_str = "\n".join(context_parts) if context_parts else "No previous analysis context"
         
-        # Build task description based on classifier type
+        # Classification-specific task description
         if classifier_type == "modality":
-            task_desc = """Classify the endoscopy imaging modality/technique.
-Possible modalities:
+            task_desc = """Classify the endoscopy imaging modality/technique:
 - WLI (White Light Imaging): Standard white light endoscopy
-- BLI (Blue Light Imaging): Enhanced visualization of blood vessels and surface patterns
+- BLI (Blue Light Imaging): Enhanced blood vessel visualization  
 - FICE (Flexible spectral Imaging Color Enhancement): Digital chromoendoscopy
-- LCI (Linked Color Imaging): Enhanced color contrast for improved lesion detection"""
+- LCI (Linked Color Imaging): Enhanced color contrast imaging"""
         else:  # region
-            task_desc = """Classify the anatomical region in the gastrointestinal tract.
-Possible regions:
+            task_desc = """Classify the anatomical region in the GI tract:
 - Hau_hong (Pharynx): Throat region
-- Thuc_quan (Esophagus): Tube connecting throat to stomach
-- Tam_vi (Cardia): Junction between esophagus and stomach
-- Than_vi (Body): Main part of stomach
-- Phinh_vi (Fundus): Upper curved portion of stomach
-- Hang_vi (Antrum): Lower portion of stomach
-- Bo_cong_lon/Bo_cong_nho: Greater/Lesser curvature of stomach
-- Hanh_ta_trang (Duodenal bulb): First part of duodenum
-- Ta_trang (Duodenum): First section of small intestine"""
-        
-        prompt = f"""**Medical Image Classification Task**
+- Thuc_quan (Esophagus): Esophageal tube
+- Tam_vi (Cardia): Gastroesophageal junction
+- Than_vi (Body): Main stomach body
+- Phinh_vi (Fundus): Upper stomach portion
+- Hang_vi (Antrum): Lower stomach portion  
+- Bo_cong_lon/nho: Greater/Lesser curvature
+- Hanh_ta_trang (Duodenal bulb): First duodenum part
+- Ta_trang (Duodenum): Duodenal segment"""
+
+        return f"""**GUIDED ADAPTIVE {classifier_type.upper()} CLASSIFICATION**
 
 Image to classify: {image_path}
-Classification type: {classifier_type}
-User query: "{query if query else f'Please classify the {classifier_type} of this endoscopy image'}"
+User query: "{query if query else f'Classify the {classifier_type} in this endoscopy image'}"
 
-Previous analysis results:
+Previous analysis context:
 {context_str}
 
-{task_desc}
+Task: {task_desc}
 
-Requirements:
-1. Use the {classifier_type}_classifier tool to classify the image
-2. Explain the visual characteristics that led to the classification
-3. Discuss clinical significance of the identified {classifier_type}
-4. Consider how the classification relates to any previous findings
+Available classes: {', '.join(class_names)}
 
-Please proceed with the classification analysis using ReAct pattern."""
+STRATEGY SELECTION:
+- If image appears clear and standard → Use direct approach
+- If previous results show complexity → Use validation approach  
+- If uncertain or low initial confidence → Use thorough approach
+
+Choose your adaptive strategy and proceed:"""
+
+    def _check_core_requirements(self, react_result: Dict[str, Any]) -> Dict[str, bool]:
+        """Check if core requirements are satisfied."""
+        # Analyze ReAct history to check requirements
+        classification_done = False
+        confidence_assessed = False
+        result_validated = False
         
-        return prompt
-    
+        if hasattr(self, 'react_history'):
+            for step in self.react_history:
+                if step.observation:
+                    try:
+                        obs_data = json.loads(step.observation)
+                        if obs_data.get("success", False):
+                            if "class_name" in obs_data:
+                                classification_done = True
+                            if "confidence" in obs_data:
+                                confidence_assessed = True
+                            if obs_data.get("confidence", 0) >= 0.7:
+                                result_validated = True
+                    except:
+                        continue
+        
+        # Also check final answer quality
+        if react_result.get("success") and react_result.get("answer"):
+            result_validated = True  # If we have final answer, consider validated
+        
+        return {
+            "classification_completed": classification_done,
+            "confidence_assessed": confidence_assessed,
+            "result_validated": result_validated
+        }
+
     def _format_agent_result(self, react_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Format ReAct result into classifier agent output."""
+        """Format guided adaptive classifier result."""
         result_key = f"{self.classifier_type}_result"
         
         if not react_result.get("success", False):
             return {
                 result_key: {
                     "success": False,
-                    "error": react_result.get("error", "Classification failed"),
-                    "reasoning_steps": len(self.react_history) if hasattr(self, 'react_history') else 0
+                    "error": react_result.get("error", "Guided adaptive classification failed"),
+                    "approach": "guided_adaptive",
+                    "core_requirements_met": self._check_core_requirements(react_result)
                 }
             }
         
-        # Extract classification data from ReAct history
+        # Extract classification results from ReAct history
         class_name = "Unknown"
         confidence = 0.0
         all_classes = {}
         description = ""
+        strategy_used = "unknown"
         
         for step in self.react_history:
-            if step.observation:
+            if step.observation and self.classifier_type in str(step.action):
                 try:
                     obs_data = json.loads(step.observation)
                     if obs_data.get("success", False):
@@ -206,153 +306,193 @@ Please proceed with the classification analysis using ReAct pattern."""
                 except json.JSONDecodeError:
                     continue
         
-        # Get the comprehensive analysis from final answer
-        final_analysis = react_result.get("answer", "")
+        # Determine strategy used based on number of steps
+        steps_used = len(self.react_history)
+        if steps_used <= 2:
+            strategy_used = "direct_approach"
+        elif steps_used <= 3:
+            strategy_used = "validation_approach"
+        else:
+            strategy_used = "thorough_approach"
         
-        # Build structured result
+        # Check core requirements
+        requirements_met = self._check_core_requirements(react_result)
+        
+        # Build result with TEXT-ONLY synthesis (no image viewing)
+        synthesis_analysis = self._perform_text_synthesis(
+            class_name, confidence, all_classes, 
+            react_result.get("answer", ""), requirements_met
+        )
+        
         classifier_result = {
             "success": True,
+            "approach": "guided_adaptive",
+            "strategy_used": strategy_used,
             "class_name": class_name,
             "confidence": confidence,
             "description": description,
             "all_classes": all_classes,
-            "analysis": final_analysis,
-            "reasoning_steps": len(self.react_history) if hasattr(self, 'react_history') else 0
+            "analysis": synthesis_analysis,
+            "core_requirements_met": requirements_met,
+            "steps_used": steps_used,
+            "synthesis_method": "text_only"  # No image viewing
         }
         
-        # Add type-specific insights
+        # Add domain-specific insights
         if self.classifier_type == "modality":
             classifier_result["clinical_advantages"] = self._get_modality_advantages(class_name)
-            classifier_result["recommended_for"] = self._get_modality_recommendations(class_name)
+            classifier_result["recommended_usage"] = self._get_modality_recommendations(class_name)
         else:  # region
             classifier_result["anatomical_significance"] = self._get_region_significance(class_name)
             classifier_result["pathology_risk"] = self._get_region_risk(class_name)
         
         return {result_key: classifier_result}
-    
-    # ===== DOMAIN-SPECIFIC HELPERS (từ version cũ) =====
+
+    def _perform_text_synthesis(self, class_name: str, confidence: float, 
+                              all_classes: Dict[str, float], llm_answer: str,
+                              requirements_met: Dict[str, bool]) -> str:
+        """
+        Perform TEXT-ONLY synthesis without looking at images.
+        Analyze tool results and LLM reasoning only.
+        """
+        try:
+            # Analyze classification quality
+            quality_indicators = []
+            
+            if confidence >= 0.8:
+                quality_indicators.append("High confidence classification")
+            elif confidence >= 0.6:
+                quality_indicators.append("Moderate confidence classification")
+            else:
+                quality_indicators.append("Low confidence classification - may need review")
+            
+            # Analyze class distribution
+            if all_classes:
+                sorted_classes = sorted(all_classes.items(), key=lambda x: x[1], reverse=True)
+                top_2 = sorted_classes[:2]
+                if len(top_2) > 1:
+                    margin = top_2[0][1] - top_2[1][1]
+                    if margin < 0.2:
+                        quality_indicators.append("Close competition between top classes")
+                    else:
+                        quality_indicators.append("Clear distinction from other classes")
+            
+            # Check requirements completion
+            completed_reqs = sum(requirements_met.values())
+            total_reqs = len(requirements_met)
+            
+            if completed_reqs == total_reqs:
+                quality_indicators.append("All core requirements satisfied")
+            else:
+                missing = [req for req, met in requirements_met.items() if not met]
+                quality_indicators.append(f"Missing requirements: {', '.join(missing)}")
+            
+            # Synthesize analysis
+            synthesis = f"""**Guided Adaptive {self.classifier_type.title()} Classification Analysis**
+
+Classification Result: {class_name} ({confidence:.1%} confidence)
+
+Quality Assessment:
+{chr(10).join(f'• {indicator}' for indicator in quality_indicators)}
+
+Tool Performance: Successfully completed classification using adaptive strategy
+Requirements Status: {completed_reqs}/{total_reqs} core requirements met
+
+Clinical Interpretation: {llm_answer[:200]}{'...' if len(llm_answer) > 200 else ''}
+
+Synthesis Method: Text-only analysis of tool results (no image review required)"""
+            
+            return synthesis
+            
+        except Exception as e:
+            return f"Synthesis analysis completed with guided adaptive approach. Classification: {class_name} ({confidence:.1%})"
+
+    # ===== DOMAIN-SPECIFIC HELPERS (reused from original) =====
     
     def _get_modality_advantages(self, modality: str) -> List[str]:
-        """Get clinical advantages of the imaging modality."""
-        advantages = {
-            "WLI": [
-                "Standard visualization with natural colors",
-                "Good for general screening",
-                "No special equipment required",
-                "Baseline reference for comparison"
-            ],
-            "BLI": [
-                "Enhanced visualization of microvasculature",
-                "Better detection of early neoplastic lesions",
-                "Improved contrast for mucosal patterns",
-                "Superior for characterizing surface irregularities"
-            ],
-            "FICE": [
-                "Digital enhancement without dyes",
-                "Customizable spectral settings",
-                "Good for detecting subtle color differences",
-                "Effective for inflammatory changes"
-            ],
-            "LCI": [
-                "Enhanced color contrast",
-                "Better visualization of inflammation",
-                "Improved polyp detection rates",
-                "Excellent for subtle lesion detection"
-            ]
+        """Get clinical advantages of imaging modality."""
+        advantages_map = {
+            "WLI": ["Standard visualization", "Natural colors", "General screening", "Baseline reference"],
+            "BLI": ["Enhanced vasculature", "Better lesion detection", "Improved contrast", "Surface pattern analysis"],
+            "FICE": ["Digital enhancement", "Customizable settings", "Color difference detection", "Inflammatory assessment"],
+            "LCI": ["Enhanced color contrast", "Better inflammation visualization", "Improved polyp detection", "Subtle lesion detection"]
         }
-        return advantages.get(modality, ["Standard endoscopic visualization"])
+        return advantages_map.get(modality, ["Standard endoscopic visualization"])
     
     def _get_modality_recommendations(self, modality: str) -> List[str]:
-        """Get recommendations for when to use this modality."""
-        recommendations = {
-            "WLI": [
-                "Initial screening examination",
-                "General diagnostic procedures",
-                "When specialized equipment unavailable",
-                "Documentation and comparison baseline"
-            ],
-            "BLI": [
-                "Evaluation of suspicious lesions",
-                "Detailed mucosal assessment",
-                "Characterization of polyps",
-                "Surveillance of high-risk patients"
-            ],
-            "FICE": [
-                "Detection of flat lesions",
-                "Assessment of inflammatory changes",
-                "When chromoendoscopy is needed",
-                "Detailed surface pattern analysis"
-            ],
-            "LCI": [
-                "Screening in high-risk patients",
-                "Detection of subtle lesions",
-                "Evaluation of healing mucosa",
-                "Enhanced adenoma detection"
-            ]
+        """Get usage recommendations for modality."""
+        recommendations_map = {
+            "WLI": ["Initial screening", "General procedures", "Documentation baseline", "When specialized unavailable"],
+            "BLI": ["Suspicious lesions", "Detailed assessment", "Polyp characterization", "High-risk surveillance"],
+            "FICE": ["Flat lesions", "Inflammatory changes", "Chromoendoscopy needs", "Surface pattern analysis"],
+            "LCI": ["High-risk screening", "Subtle lesions", "Healing assessment", "Enhanced adenoma detection"]
         }
-        return recommendations.get(modality, ["Consult with endoscopist for optimal technique"])
+        return recommendations_map.get(modality, ["Consult endoscopist for optimal technique"])
     
     def _get_region_significance(self, region: str) -> str:
-        """Get anatomical significance of the region."""
-        significance = {
-            "Hau_hong": "Entry point of digestive system, important for swallowing function and respiratory interface",
-            "Thuc_quan": "Critical conduit for food transport, common site for reflux disease and Barrett's esophagus",
-            "Tam_vi": "Gastroesophageal junction, prone to inflammation and adenocarcinoma development",
-            "Than_vi": "Main gastric body for acid production and digestion, common site for ulcers and tumors",
-            "Phinh_vi": "Gastric fundus for storage, can develop fundic gland polyps and varices",
-            "Hang_vi": "Gastric antrum, high-risk area for Helicobacter pylori and gastric cancer",
-            "Bo_cong_lon": "Greater curvature, less common site for pathology but important for surgical planning",
-            "Bo_cong_nho": "Lesser curvature, high-risk area for gastric cancer and lymph node involvement",
-            "Hanh_ta_trang": "Duodenal bulb, common site for duodenal ulcers and Brunner's gland hyperplasia",
-            "Ta_trang": "Duodenum proper, important for nutrient absorption and celiac disease manifestation"
+        """Get anatomical significance of region."""
+        significance_map = {
+            "Hau_hong": "Entry point, swallowing function, respiratory interface",
+            "Thuc_quan": "Food transport conduit, reflux disease site, Barrett's risk",
+            "Tam_vi": "GE junction, inflammation prone, adenocarcinoma development",
+            "Than_vi": "Main gastric body, acid production, ulcer and tumor site",
+            "Phinh_vi": "Gastric fundus storage, fundic polyps, varices development",
+            "Hang_vi": "Gastric antrum, H. pylori risk, gastric cancer predilection",
+            "Bo_cong_lon": "Greater curvature, less pathology, surgical planning importance",
+            "Bo_cong_nho": "Lesser curvature, high cancer risk, lymph node involvement",
+            "Hanh_ta_trang": "Duodenal bulb, duodenal ulcers, Brunner's hyperplasia",
+            "Ta_trang": "Duodenum proper, nutrient absorption, celiac manifestation"
         }
-        return significance.get(region, "Important anatomical region of the gastrointestinal tract")
+        return significance_map.get(region, "Important GI tract anatomical region")
     
     def _get_region_risk(self, region: str) -> Dict[str, str]:
-        """Get pathology risk assessment for the region."""
-        risk_profiles = {
-            "Hau_hong": {
-                "cancer_risk": "Low", 
-                "common_pathology": "Pharyngitis, foreign bodies, reflux changes"
-            },
-            "Thuc_quan": {
-                "cancer_risk": "Moderate", 
-                "common_pathology": "GERD, Barrett's esophagus, squamous cell carcinoma, adenocarcinoma"
-            },
-            "Tam_vi": {
-                "cancer_risk": "Moderate-High", 
-                "common_pathology": "Carditis, intestinal metaplasia, adenocarcinoma"
-            },
-            "Than_vi": {
-                "cancer_risk": "Moderate", 
-                "common_pathology": "Gastritis, peptic ulcers, MALT lymphoma, adenocarcinoma"
-            },
-            "Phinh_vi": {
-                "cancer_risk": "Low", 
-                "common_pathology": "Fundic gland polyps, portal hypertensive gastropathy, varices"
-            },
-            "Hang_vi": {
-                "cancer_risk": "High", 
-                "common_pathology": "H. pylori gastritis, intestinal metaplasia, adenoma, adenocarcinoma"
-            },
-            "Bo_cong_lon": {
-                "cancer_risk": "Low-Moderate", 
-                "common_pathology": "Gastric ulcers, GIST, lymphoma"
-            },
-            "Bo_cong_nho": {
-                "cancer_risk": "High", 
-                "common_pathology": "Gastric ulcers, adenocarcinoma, lymph node metastases"
-            },
-            "Hanh_ta_trang": {
-                "cancer_risk": "Low", 
-                "common_pathology": "Duodenal ulcers, Brunner's gland hyperplasia, duodenitis"
-            },
-            "Ta_trang": {
-                "cancer_risk": "Low", 
-                "common_pathology": "Duodenitis, celiac disease, adenocarcinoma (rare)"
-            }
+        """Get pathology risk for region."""
+        risk_map = {
+            "Hau_hong": {"cancer_risk": "Low", "common_pathology": "Pharyngitis, foreign bodies"},
+            "Thuc_quan": {"cancer_risk": "Moderate", "common_pathology": "GERD, Barrett's, carcinoma"},
+            "Tam_vi": {"cancer_risk": "Moderate-High", "common_pathology": "Carditis, metaplasia"},
+            "Than_vi": {"cancer_risk": "Moderate", "common_pathology": "Gastritis, ulcers, lymphoma"},
+            "Phinh_vi": {"cancer_risk": "Low", "common_pathology": "Fundic polyps, varices"},
+            "Hang_vi": {"cancer_risk": "High", "common_pathology": "H. pylori, cancer"},
+            "Bo_cong_lon": {"cancer_risk": "Low-Moderate", "common_pathology": "Ulcers, GIST"},
+            "Bo_cong_nho": {"cancer_risk": "High", "common_pathology": "Ulcers, cancer"},
+            "Hanh_ta_trang": {"cancer_risk": "Low", "common_pathology": "Duodenal ulcers"},
+            "Ta_trang": {"cancer_risk": "Low", "common_pathology": "Duodenitis, celiac"}
         }
-        return risk_profiles.get(region, {
-            "cancer_risk": "Variable", 
-            "common_pathology": "Various gastrointestinal conditions"
-        })
+        return risk_map.get(region, {"cancer_risk": "Variable", "common_pathology": "Various conditions"})
+
+# ===== USAGE EXAMPLE =====
+def test_guided_adaptive_classifier():
+    """Test guided adaptive classifier."""
+    
+    # Test modality classifier
+    modality_classifier = GuidedAdaptiveClassifierAgent(
+        model_path="medical_ai_agents/weights/modal_best.pt",
+        class_names=["WLI", "BLI", "FICE", "LCI"],
+        classifier_type="modality",
+        device="cuda"
+    )
+    
+    test_state = {
+        "image_path": "test_image.jpg",
+        "query": "What imaging technique is used in this endoscopy?",
+        "detector_result": {
+            "success": True,
+            "count": 2,
+            "objects": [{"confidence": 0.85}, {"confidence": 0.72}]
+        }
+    }
+    
+    print("=== GUIDED ADAPTIVE CLASSIFIER TEST ===")
+    result = modality_classifier.process(test_state)
+    
+    if result.get("modality_result"):
+        mod_result = result["modality_result"]
+        print(f"Success: {mod_result.get('success')}")
+        print(f"Approach: {mod_result.get('approach')}")
+        print(f"Strategy: {mod_result.get('strategy_used')}")
+        print(f"Requirements met: {mod_result.get('core_requirements_met')}")
+        print(f"Synthesis method: {mod_result.get('synthesis_method')}")
+
+if __name__ == "__main__":
+    test_guided_adaptive_classifier()

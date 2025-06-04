@@ -53,7 +53,6 @@ Hệ thống được thiết kế theo kiến trúc đa agent dạng graph, tro
 - **Detector Agent**: Phát hiện polyp trong hình ảnh nội soi sử dụng YOLO
 - **Classifier Agents**: Phân loại kỹ thuật chụp và vị trí giải phẫu
 - **VQA Agent**: Trả lời câu hỏi dựa trên hình ảnh sử dụng LLaVA
-- **Reflection Node**: Phát hiện và điều chỉnh bias trong câu trả lời
 
 Tất cả các node được kết nối và điều phối bởi LangGraph, sử dụng các router logic để quyết định luồng xử lý dựa trên loại tác vụ.
 
@@ -119,7 +118,6 @@ from medical_ai_agents import MedicalAISystem, MedicalGraphConfig
 # Tạo config
 config = MedicalGraphConfig(
     device="cuda",  # hoặc "cpu"
-    use_reflection=True,
     detector_model_path="weights/detect_best.pt",
     vqa_model_path="weights/llava-med-mistral-v1.5-7b"
 )

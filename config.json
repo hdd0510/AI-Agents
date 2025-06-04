@@ -9,7 +9,6 @@
   },
   "medical_ai": {
     "device": "cuda",
-    "use_reflection": true,
     "detector_model_path": "medical_ai_agents/weights/detect_best.pt",
     "vqa_model_path": "medical_ai_agents/weights/llava-med-mistral-v1.5-7b",
     "modality_classifier_path": "medical_ai_agents/weights/modal_best.pt",

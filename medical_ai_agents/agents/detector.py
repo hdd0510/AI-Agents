@@ -2,43 +2,49 @@
 # -*- coding: utf-8 -*-
 
 """
-Medical AI Agents - Simplified Detector Agent (Following New Pattern)
---------------------------------------------------------------------
-Agent phát hiện polyp theo pattern simplified mới nhưng vẫn đầy đủ functionality.
+TIERED DETECTOR AGENT - APPROACH (Safety Critical)
+============================================================
+Fixed workflow: detect → visualize → synthesis (always look at visualization)
 """
 
 import json
+import os
 import logging
-import re
-from typing import Dict, Any, List
-import time
+from typing import Dict, Any, List, Optional
+from langchain_core.messages import SystemMessage, HumanMessage
 
-from langchain.schema import HumanMessage, SystemMessage
-
-from medical_ai_agents.agents.base_agent import BaseAgent
+from medical_ai_agents.agents.base_agent import BaseAgent, ThoughtType
 from medical_ai_agents.tools.base_tools import BaseTool
 from medical_ai_agents.tools.detection.yolo_tools import YOLODetectionTool
 from medical_ai_agents.tools.detection.util_tools import VisualizationTool
 
 class DetectorAgent(BaseAgent):
-    """Simplified Detector Agent theo pattern mới với đầy đủ functionality."""
+    """
+    Detector Agent - Safety Critical
+    
+    FIXED WORKFLOW (no deviations allowed):
+    1. YOLO Detection (required)
+    2. Visualization Creation (always - for synthesis)
+    3. Synthesis with Visualization Review (required)
+    """
     
     def __init__(self, model_path: str, llm_model: str = "gpt-4o-mini", device: str = "cuda"):
-        """
-        Khởi tạo Detector Agent theo pattern simplified.
-        
-        Args:
-            model_path: Đường dẫn đến YOLO model weights
-            llm_model: Mô hình LLM sử dụng làm controller
-            device: Device để chạy model (cuda/cpu)
-        """
         self.model_path = model_path
         super().__init__(name="Detector Agent", llm_model=llm_model, device=device)
+        
+        # configuration
+        self.max_iterations = 3  # Exactly 3 steps: detect → visualize → synthesis
+        self.required_workflow = [
+            {"step": 1, "action": "yolo_detection", "required": True},
+            {"step": 2, "action": "visualize_detections", "required": True},  # Always for synthesis
+            {"step": 3, "action": "synthesis_with_visualization", "required": True}
+        ]
+        
         self.detector_tool = None
         self.visualize_tool = None
     
     def _register_tools(self) -> List[BaseTool]:
-        """Register tools for this agent."""
+        """Register detection tools."""
         self.detector_tool = YOLODetectionTool(
             model_path=self.model_path,
             device=self.device
@@ -47,462 +53,296 @@ class DetectorAgent(BaseAgent):
         return [self.detector_tool, self.visualize_tool]
     
     def _get_agent_description(self) -> str:
-        return """I am a polyp detection specialist using YOLO technology.
-My workflow:
-1. Use yolo_detection to find polyps
-2. Use visualize_detections to create visual results (if polyps found)
-3. Provide medical assessment"""
+        """detector description."""
+        return """I am a SAFETY-CRITICAL polyp detection specialist using workflow.
+
+My MANDATORY process (no deviations):
+1. DETECT: Use YOLO to find polyps with precise confidence scores
+2. VISUALIZE: Always create visualization for internal analysis 
+3. SYNTHESIZE: Review both original image and visualization to provide final assessment
+
+I ALWAYS create visualization for synthesis, but only show to user if they request it."""
 
     def _get_system_prompt(self) -> str:
-        """Get system prompt theo pattern simplified."""
-        return f"""Bạn là AI chuyên phát hiện polyp trong hình ảnh nội soi.
-Danh sách công cụ có sẵn:
-- yolo_detection: Phát hiện polyp trong hình ảnh
-- visualize_detections: Tạo hình ảnh với bounding box
+        """system prompt with fixed workflow."""
+        return f"""You are a SAFETY-CRITICAL polyp detection specialist following workflow.
 
-Luồng làm việc:
-1) Nhận đường dẫn ảnh và yêu cầu
-2) Sử dụng yolo_detection để phát hiện polyp  
-3) Nếu cần visualization, sử dụng visualize_detections
-4) Phân tích kết quả và đưa ra nhận định chuyên môn"""
+MANDATORY 3-STEP PROCESS (follow exactly):
 
-    def _format_task_input(self, task_input: Dict[str, Any]) -> str:
-        """Format task input theo pattern simplified."""
-        image_path = task_input.get("image_path", "")
-        query = task_input.get("query", "") or "Detect polyps in this endoscopy image"
-        medical_context = task_input.get("medical_context", {})
-        
-        context_lines = []
-        if medical_context:
-            for key, val in medical_context.items():
-                context_lines.append(f"- {key}: {val}")
-        context_str = "\n".join(context_lines) if context_lines else "No medical context provided"
-        
-        return (
-            f"**Polyp Detection Task**\n\n"
-            f"Image to analyze: {image_path}\n"
-            f"Query: {query}\n\n"
-            f"Medical context:\n{context_str}\n\n"
-            f"Tool call format:\nTool: yolo_detection\n"
-            f"Parameters: {{\"image_path\": \"<path>\", \"conf_thresh\": 0.25}}\n\n"
-            f"If visualization needed:\nTool: visualize_detections\n"
-            f"Parameters: {{\"image_path\": \"<path>\", \"detections\": <results_from_yolo>}}"
-        )
+Step 1 - DETECTION (REQUIRED):
+Thought: I must perform polyp detection for patient safety
+Action: yolo_detection
+Action Input: {{"image_path": "<path>", "conf_thresh": 0.25}}
 
-    def _format_synthesis_input(self) -> str:
-        """Format synthesis input theo pattern simplified."""
-        return (
-            f"Hãy xuất JSON đúng định dạng:\n"
-            f"```json\n"
-            f"{{\n"
-            f"  \"detector_result\": {{\n"
-            f"    \"success\": true/false,\n"
-            f"    \"count\": <số_polyp>,\n"
-            f"    \"objects\": [...danh_sách_polyp...],\n"
-            f"    \"analysis\": \"phân tích chuyên môn về kết quả phát hiện\",\n"
-            f"    \"visualization_available\": true/false,\n"
-            f"    \"visualization_base64\": \"base64_string_if_available\"\n"
-            f"  }}\n"
-            f"}}\n"
-            f"```"
-        )
+Step 2 - VISUALIZATION (ALWAYS REQUIRED):
+Thought: Creating visualization for internal analysis and synthesis
+Action: visualize_detections  
+Action Input: {{"image_path": "<path>", "detections": [results_from_step_1]}}
 
-    def _parse_tool_calls(self, plan: str) -> List[Dict[str, Any]]:
-        """Parse tool calls theo pattern simplified của ClassifierAgent mới."""
-        tool_calls = []
-        lines = plan.split("\n")
-        current_tool = None
-        current_params = {}
-        
-        for idx, line in enumerate(lines):
-            l = line.strip()
-            if l.startswith("Tool:"):
-                if current_tool:
-                    tool_calls.append({"tool_name": current_tool, "params": current_params})
-                current_tool = l.replace("Tool:", "").strip()
-                current_params = {}
-            elif l.startswith("Parameters:"):
-                try:
-                    ptxt = l.replace("Parameters:", "").strip()
-                    if ptxt.startswith("{") and ptxt.endswith("}"):
-                        current_params = json.loads(ptxt)
-                    elif ptxt.startswith("{"):
-                        json_str = ptxt
-                        for nxt in lines[idx + 1:]:
-                            json_str += " " + nxt.strip()
-                            if "}" in nxt:
-                                break
-                        current_params = json.loads(json_str)
-                except Exception:
-                    current_params = {}
-        
-        if current_tool:
-            tool_calls.append({"tool_name": current_tool, "params": current_params})
-        
-        # Fallback parsing như ClassifierAgent mới
-        if not tool_calls:
-            tool_pattern = r"Tool:\s*(yolo_detection|visualize_detections)"
-            param_pattern = r"Parameters:\s*(\{[^}]*\})"
-            tools = re.findall(tool_pattern, plan)
-            params = re.findall(param_pattern, plan, re.DOTALL)
-            for i, tool in enumerate(tools):
-                param_dict = {}
-                if i < len(params):
-                    try:
-                        param_dict = json.loads(params[i])
-                    except:
-                        param_dict = {}
-                tool_calls.append({"tool_name": tool, "params": param_dict})
-        
-        return tool_calls
+Step 3 - SYNTHESIS (REQUIRED):
+Final Answer: [Review both original image and visualization, then provide comprehensive medical assessment]
 
-    def _format_agent_result(self, react_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract results from ReAct execution."""
-        if not react_result.get("success"):
-            return {
-                "detector_result": {
-                    "success": False,
-                    "error": react_result.get("error", "Detection failed"),
-                    "steps_used": react_result.get("steps_used", 0)
-                }
-            }
-        
-        # Extract detection data from history
-        objects = []
-        count = 0
-        visualization_base64 = None
-        
-        for step in self.react_history:
-            if step.observation and "yolo_detection" in str(step.action):
-                try:
-                    obs_data = json.loads(step.observation)
-                    if obs_data.get("success", False):
-                        objects = obs_data.get("objects", [])
-                        count = obs_data.get("count", len(objects))
-                except:
-                    continue
-                    
-            elif step.observation and "visualize_detections" in str(step.action):
-                try:
-                    obs_data = json.loads(step.observation)
-                    if obs_data.get("success", False):
-                        visualization_base64 = obs_data.get("visualization_base64")
-                except:
-                    continue
-        
-        result = {
-            "success": True,
-            "count": count,
-            "objects": objects,
-            "analysis": react_result.get("answer", "Polyp detection completed"),
-            "steps_used": react_result.get("steps_used", 0),
-            "visualization_available": visualization_base64 is not None
-        }
-        
-        if visualization_base64:
-            result["visualization_base64"] = visualization_base64
-        
-        return {"detector_result": result}
+CRITICAL RULES:
+- NEVER skip any step
+- ALWAYS create visualization (even if 0 polyps for empty visualization) 
+- MUST review visualization in final synthesis
+- Be precise and medically accurate
+- Maximum 3 steps only
 
-    # ===== ĐẦY ĐỦ CÁC HÀM TỪ VERSION CŨ =====
-    
+Available tools: {self.tool_descriptions}
+
+Start with Step 1:"""
+
     def initialize(self) -> bool:
-        """Khởi tạo agent và các công cụ (từ version cũ)."""
+        """Initialize detector agent."""
         try:
-            # Tools đã được khởi tạo trong _register_tools
             self.initialized = True
+            self.logger.info("Detector Agent initialized successfully")
             return True
         except Exception as e:
-            self.logger.error(f"Failed to initialize detector agent: {str(e)}")
-            self.initialized = False
+            self.logger.error(f"Failed to initialize Detector: {str(e)}")
             return False
-    
+
     def _extract_task_input(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract task-specific input from state (từ version cũ)."""
+        """Extract detection task input."""
         return {
             "image_path": state.get("image_path", ""),
             "query": state.get("query", ""),
             "medical_context": state.get("medical_context", {}),
-            "user_type": state.get("user_type", "patient")
+            "show_visualization": self._should_show_visualization(state.get("query", ""))
         }
-    
-    def _process_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Enhanced process_state với intelligent tool orchestration (từ version cũ)."""
-        try:
-            # Ensure initialized
-            if not self.initialized:
-                success = self.initialize()
-                if not success:
-                    return {**state, "error": f"Failed to initialize {self.name}"}
-            
-            # Extract task input
-            task_input = self._extract_task_input(state)
-            self.logger.info(f"[Detector] Processing task: {json.dumps(task_input, indent=2)}")
-            
-            # Get LLM plan
-            messages = [
-                SystemMessage(content=self.system_prompt),
-                HumanMessage(content=self._format_task_input(task_input))
-            ]
-            
-            response = self.llm.invoke(messages)
-            plan = response.content
-            self.logger.info(f"[Detector] LLM plan:\n{plan}")
-            
-            # Parse tool calls
-            tool_calls = self._parse_tool_calls(plan)
-            self.logger.info(f"[Detector] Parsed tool calls: {json.dumps(tool_calls, indent=2)}")
-            
-            # Execute tools với intelligent orchestration từ version cũ
-            results = {}
-            tool_outputs = {}
-            
-            for i, tool_call in enumerate(tool_calls):
-                tool_name = tool_call.get("tool_name")
-                params = tool_call.get("params", {})
-                
-                # Fill in image_path nếu thiếu
-                if "image_path" not in params or not params["image_path"]:
-                    params["image_path"] = task_input.get("image_path", "")
-                
-                self.logger.info(f"[Detector] Executing tool {i+1}/{len(tool_calls)}: {tool_name}")
-                
-                # Special handling cho visualization như version cũ
-                if tool_name == "visualize_detections":
-                    # Cần detections từ yolo_detection trước đó
-                    if "yolo_detection" in tool_outputs:
-                        yolo_result = tool_outputs["yolo_detection"]
-                        if yolo_result.get("success", False):
-                            params["detections"] = yolo_result.get("objects", [])
-                            self.logger.info(f"[Detector] Using {len(params['detections'])} detections for visualization")
-                        else:
-                            self.logger.warning("[Detector] Skipping visualization - no valid detections")
-                            continue
-                    else:
-                        self.logger.warning("[Detector] Skipping visualization - no yolo_detection results")
-                        continue
-                
-                # Execute tool
-                tool_result = self.execute_tool(tool_name, **params)
-                results[tool_name] = tool_result
-                tool_outputs[tool_name] = tool_result
-                
-                self.logger.info(f"[Detector] Tool {tool_name} completed: {tool_result.get('success', False)}")
-            
-            # Synthesize results với multipart message support từ version cũ
-            viz_results = {}
-            other_results = {}
-            img_base64 = None
-            
-            for tool_name, result in results.items():
-                if tool_name == "visualize_detections" and result.get("success"):
-                    viz_results[tool_name] = {
-                        "success": result["success"],
-                        "count": result.get("count", 0)
-                    }
-                    # Lưu base64 image riêng để đưa vào multipart message
-                    img_base64 = result.get("visualization_base64")
-                else:
-                    other_results[tool_name] = result
-            
-            synthesis_messages = [
-                SystemMessage(content=self.system_prompt),
-            ]
-            
-            # Tạo multipart message với text và image nếu có visualization như version cũ
-            if img_base64:
-                synthesis_messages.append(
-                    HumanMessage(
-                        content=[
-                            {"type": "text", "text": f"Used yolo and visualization tools. Tool execution results:\n{json.dumps(other_results, indent=2)}\n\n{self._format_synthesis_input()}"},
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_base64}"}}
-                        ]
-                    )
-                )
-            else:
-                # Fallback về text-only message
-                synthesis_messages.append(
-                    HumanMessage(content=f"Used yolo tool without visualization. Tool execution results:\n{json.dumps(results, indent=2)}\n\n{self._format_synthesis_input()}")
-                )
 
-            synthesis_response = self.llm.invoke(synthesis_messages)
-            agent_result = self._extract_agent_result(synthesis_response.content)
+    def _should_show_visualization(self, query: str) -> bool:
+        """Analyze query intention to decide if user wants to see visualization."""
+        if not query:
+            return False
             
-            # Add visualization info nếu có như version cũ
-            if "visualize_detections" in tool_outputs:
-                viz_result = tool_outputs["visualize_detections"]
-                if viz_result.get("success") and "detector_result" in agent_result:
-                    agent_result["detector_result"]["visualization_base64"] = viz_result.get("visualization_base64")
-                    agent_result["detector_result"]["visualization_available"] = True
-            
-            return {**state, **agent_result}
-            
-        except Exception as e:
-            import traceback
-            error_msg = f"Error in {self.name}: {str(e)}\n{traceback.format_exc()}"
-            self.logger.error(error_msg)
-            return {**state, "error": error_msg}
-    
-    # ===== CÁC HÀM HELPER TỪ VERSION CŨ =====
-    
-    def _extract_reasoning_and_tools(self, plan: str) -> Dict[str, str]:
-        """Extract REASONING and TOOL_PLAN sections (từ version cũ)."""
-        sections = {"reasoning": "", "tools": ""}
+        query_lower = query.lower()
         
-        # Look for REASONING section
-        reasoning_match = re.search(r'REASONING:\s*(.*?)(?=TOOL_PLAN:|Tool:|$)', plan, re.DOTALL | re.IGNORECASE)
-        if reasoning_match:
-            sections["reasoning"] = reasoning_match.group(1).strip()
-        
-        # Look for TOOL_PLAN section
-        tool_plan_match = re.search(r'TOOL_PLAN:\s*(.*?)(?=REASONING:|$)', plan, re.DOTALL | re.IGNORECASE)
-        if tool_plan_match:
-            sections["tools"] = tool_plan_match.group(1).strip()
-        else:
-            # Look for tools after reasoning
-            if sections["reasoning"]:
-                remaining = plan[plan.find(sections["reasoning"]) + len(sections["reasoning"]):]
-                sections["tools"] = remaining.strip()
-        
-        return sections
-    
-    def _parse_structured_tools(self, tools_text: str) -> List[Dict[str, Any]]:
-        """Parse tools from structured TOOL_PLAN format (từ version cũ)."""
-        tool_calls = []
-        lines = tools_text.split('\n')
-        
-        current_tool = None
-        current_params = {}
-        
-        for line in lines:
-            line = line.strip()
-            
-            if line.startswith('Tool:'):
-                # Save previous tool
-                if current_tool:
-                    tool_calls.append({
-                        "tool_name": current_tool,
-                        "params": current_params,
-                        "source": "structured"
-                    })
-                
-                # Start new tool
-                current_tool = line.replace('Tool:', '').strip()
-                current_params = {}
-                
-            elif line.startswith('Parameters:'):
-                # Parse JSON parameters
-                params_text = line.replace('Parameters:', '').strip()
-                try:
-                    if params_text.startswith('{') and params_text.endswith('}'):
-                        current_params = json.loads(params_text)
-                    else:
-                        # Try to construct from key=value pairs
-                        current_params = self._parse_key_value_params(params_text)
-                except json.JSONDecodeError:
-                    self.logger.warning(f"Failed to parse parameters: {params_text}")
-                    current_params = {}
-        
-        # Add last tool
-        if current_tool:
-            tool_calls.append({
-                "tool_name": current_tool,
-                "params": current_params,
-                "source": "structured"
-            })
-        
-        return tool_calls
-    
-    def _parse_tool_patterns(self, plan: str) -> List[Dict[str, Any]]:
-        """Parse tools using regex patterns (từ version cũ)."""
-        tool_calls = []
-        
-        # Pattern for Tool: ... Parameters: {...}
-        tool_pattern = r'Tool:\s*(\w+).*?Parameters:\s*(\{[^}]*\})'
-        matches = re.findall(tool_pattern, plan, re.DOTALL | re.IGNORECASE)
-        
-        for tool_name, params_str in matches:
-            try:
-                params = json.loads(params_str)
-                tool_calls.append({
-                    "tool_name": tool_name.strip(),
-                    "params": params,
-                    "source": "pattern"
-                })
-            except json.JSONDecodeError:
-                self.logger.warning(f"Failed to parse tool parameters: {params_str}")
-        
-        return tool_calls
-    
-    def _intelligent_fallback(self, plan: str, reasoning: str) -> List[Dict[str, Any]]:
-        """Intelligent fallback based on LLM reasoning (từ version cũ)."""
-        tool_calls = []
-        
-        # Always need yolo_detection
-        base_tool = {
-            "tool_name": "yolo_detection",
-            "params": {"image_path": ""},  # Will be filled later
-            "source": "intelligent_fallback"
-        }
-        tool_calls.append(base_tool)
-        
-        # Analyze reasoning for visualization need
-        viz_indicators = [
-            "visualiz", "show", "display", "see", "image", "bounding", "box",
-            "helpful", "understand", "explain", "patient", "visual"
+        # Explicit visualization requests
+        show_keywords = [
+            "show", "display", "visualize", "see", "view", "image", "picture",
+            "highlight", "mark", "point out", "circle", "box", "outline",
+            "hiện", "hiển thị", "cho xem", "khoanh", "đánh dấu", "chỉ ra"
         ]
         
-        reasoning_lower = (reasoning + " " + plan).lower()
-        viz_score = sum(1 for indicator in viz_indicators if indicator in reasoning_lower)
+        return any(keyword in query_lower for keyword in show_keywords)
+
+    def _format_task_input(self, task_input: Dict[str, Any]) -> str:
+        """Format task input for workflow."""
+        image_path = task_input.get("image_path", "")
+        query = task_input.get("query", "")
+        show_viz = task_input.get("show_visualization", False)
         
-        # Also check for explicit mentions
-        explicit_viz = any(phrase in reasoning_lower for phrase in [
-            "visualization", "visualize", "show image", "display result",
-            "bounding box", "helpful to show"
-        ])
+        return f"""**POLYP DETECTION TASK**
+
+Image to analyze: {image_path}
+User query: "{query if query else 'Detect polyps in this endoscopy image'}"
+Show visualization to user: {show_viz}
+
+MANDATORY WORKFLOW:
+Follow the exact 3-step process defined in your system prompt.
+Step 1: yolo_detection
+Step 2: visualize_detections (always create for synthesis)
+Step 3: Final Answer with synthesis
+
+Begin Step 1 now:"""
+
+    def _run_react_loop(self, task_input: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Override ReAct loop for workflow.
+        Fixed 3-step process with no deviations.
+        """
+        self.react_history = []
         
-        if explicit_viz or viz_score >= 3:
-            viz_tool = {
-                "tool_name": "visualize_detections",
-                "params": {
-                    "image_path": "",  # Will be filled
-                    "detections": []   # Will be filled from yolo results
-                },
-                "source": "intelligent_fallback"
-            }
-            tool_calls.append(viz_tool)
-            self.logger.info(f"[Detector] Intelligent fallback decided visualization needed (score: {viz_score}, explicit: {explicit_viz})")
+        # STEP 1: DETECTION (Required)
+        step1_result = self._execute_step(
+            step_num=1,
+            action="yolo_detection", 
+            task_input=task_input
+        )
         
-        return tool_calls
-    
-    def _enhance_tool_calls(self, tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Enhance tool calls with missing information (từ version cũ)."""
-        for tool_call in tool_calls:
-            params = tool_call.get("params", {})
-            
-            # Ensure image_path is present
-            if "image_path" not in params or not params["image_path"]:
-                params["image_path"] = "__STATE_IMAGE_PATH__"  # Placeholder
-            
-            # Set default confidence threshold for yolo
-            if tool_call["tool_name"] == "yolo_detection" and "conf_thresh" not in params:
-                params["conf_thresh"] = 0.25
-            
-            tool_call["params"] = params
+        if not step1_result.get("success", False):
+            return {"success": False, "error": "Step 1 (detection) failed", "step_failed": 1}
         
-        return tool_calls
-    
-    def _parse_key_value_params(self, params_text: str) -> Dict[str, Any]:
-        """Parse parameters from key=value format (từ version cũ)."""
-        params = {}
-        # Simple parser for image_path="value" format
-        matches = re.findall(r'(\w+)=(["\']?)([^"\',\s]+)\2', params_text)
-        for key, quote, value in matches:
-            # Try to convert to appropriate type
-            if value.lower() in ['true', 'false']:
-                params[key] = value.lower() == 'true'
-            elif value.replace('.', '').isdigit():
-                params[key] = float(value) if '.' in value else int(value)
+        # STEP 2: VISUALIZATION (Always required for synthesis)
+        step2_result = self._execute_step(
+            step_num=2,
+            action="visualize_detections",
+            task_input=task_input,
+            detection_results=step1_result
+        )
+        
+        if not step2_result.get("success", False):
+            return {"success": False, "error": "Step 2 (visualization) failed", "step_failed": 2}
+        
+        # STEP 3: SYNTHESIS with multimodal input (original + visualization)
+        synthesis_result = self._execute_synthesis_with_visualization(
+            task_input=task_input,
+            detection_results=step1_result,
+            visualization_results=step2_result
+        )
+        
+        return synthesis_result
+
+    def _execute_step(self, step_num: int, action: str, task_input: Dict[str, Any], **kwargs) -> Dict[str, Any]:
+        """Execute a step with validation."""
+        try:
+            if action == "yolo_detection":
+                image_path = task_input.get("image_path", "")
+                result = self.detector_tool._run(image_path=image_path, conf_thresh=0.25)
+                
+            elif action == "visualize_detections":
+                image_path = task_input.get("image_path", "")
+                detection_results = kwargs.get("detection_results", {})
+                detections = detection_results.get("objects", [])
+                result = self.visualize_tool._run(image_path=image_path, detections=detections)
+                
             else:
-                params[key] = value
-        return params
+                return {"success": False, "error": f"Unknown action: {action}"}
+            
+            # Log step completion
+            self.logger.info(f"Step {step_num} ({action}) completed: {result.get('success', False)}")
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Step {step_num} ({action}) failed: {str(e)}")
+            return {"success": False, "error": str(e)}
+
+    def _execute_synthesis_with_visualization(self, task_input: Dict[str, Any], 
+                                           detection_results: Dict[str, Any],
+                                           visualization_results: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute final synthesis step with multimodal input:
+        - Original image for context
+        - Visualization image for review
+        """
+        try:
+            image_path = task_input.get("image_path", "")
+            query = task_input.get("query", "")
+            show_viz = task_input.get("show_visualization", False)
+            
+            # Prepare synthesis prompt
+            synthesis_prompt = f"""**SYNTHESIS TASK: Review Detection Results with Visualization**
+
+Original Query: "{query}"
+Detection Results: {json.dumps(detection_results, indent=2)}
+Visualization Created: {visualization_results.get('success', False)}
+Show visualization to user: {show_viz}
+
+SYNTHESIS REQUIREMENTS:
+1. Review the detection results carefully
+2. Analyze the visualization I created to verify findings
+3. Provide comprehensive medical assessment
+4. Include confidence levels and clinical recommendations
+5. Only mention showing visualization if user requested it
+
+Please provide your final medical assessment:"""
+
+            # Create multimodal message (original image + visualization)
+            messages = [
+                SystemMessage(content=self._get_agent_description()),
+                HumanMessage(
+                    content=[
+                        {"type": "text", "text": synthesis_prompt},
+                        {"type": "image_url", "image_url": {"url": f"file://{image_path}"}},
+                    ]
+                )
+            ]
+            
+            # Add visualization image if available
+            if visualization_results.get("success") and visualization_results.get("visualization_base64"):
+                viz_b64 = visualization_results["visualization_base64"]
+                messages[-1].content.append({
+                    "type": "image_url", 
+                    "image_url": {"url": f"data:image/png;base64,{viz_b64}"}
+                })
+            
+            # Get synthesis from LLM
+            response = self.llm.invoke(messages)
+            synthesis_answer = response.content.strip()
+            
+            return {
+                "success": True,
+                "answer": synthesis_answer,
+                "detection_data": detection_results,
+                "visualization_data": visualization_results,
+                "reviewed_visualization": True
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Synthesis failed: {str(e)}")
+            return {
+                "success": False, 
+                "error": f"Synthesis failed: {str(e)}",
+                "detection_data": detection_results,
+                "visualization_data": visualization_results
+            }
+
+    def _format_agent_result(self, react_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Format detector result."""
+        if not react_result.get("success"):
+            return {
+                "detector_result": {
+                    "success": False,
+                    "error": react_result.get("error", "detection failed"),
+                    "step_failed": react_result.get("step_failed", 0),
+                }
+            }
+        
+        # Extract data from execution
+        detection_data = react_result.get("detection_data", {})
+        visualization_data = react_result.get("visualization_data", {})
+        
+        result = {
+            "success": True,
+            "count": detection_data.get("count", 0),
+            "objects": detection_data.get("objects", []),
+            "analysis": react_result.get("answer", "detection completed"),
+            "visualization_available": visualization_data.get("success", False),
+            "synthesis_reviewed_visualization": react_result.get("reviewed_visualization", False),
+            "steps_completed": 3
+        }
+        
+        # Include visualization data
+        if visualization_data.get("success") and visualization_data.get("visualization_base64"):
+            result["visualization_base64"] = visualization_data["visualization_base64"]
+        
+        return {"detector_result": result}
+
+# ===== USAGE EXAMPLE =====
+def test_detector():
+    """Test the detector agent."""
+    
+    detector = DetectorAgent(
+        model_path="medical_ai_agents/weights/detect_best.pt",
+        device="cuda"
+    )
+    
+    # Test case 1: User wants to see visualization
+    test_state_1 = {
+        "image_path": "test_image.jpg",
+        "query": "Please detect polyps and show me the results with visualization"
+    }
+    
+    # Test case 2: User doesn't request visualization
+    test_state_2 = {
+        "image_path": "test_image.jpg", 
+        "query": "Are there any polyps in this image?"
+    }
+    
+    print("=== DETECTOR TEST ===")
+    
+    for i, test_state in enumerate([test_state_1, test_state_2], 1):
+        print(f"\nTest Case {i}: {test_state['query']}")
+        result = detector.process(test_state)
+        
+        if result.get("detector_result"):
+            det_result = result["detector_result"]
+            print(f"Success: {det_result.get('success')}")
+            print(f"Steps completed: {det_result.get('steps_completed')}")
+            print(f"Reviewed visualization: {det_result.get('synthesis_reviewed_visualization')}")
+            print(f"Visualization available: {det_result.get('visualization_available')}")
+
+if __name__ == "__main__":
+    test_detector()

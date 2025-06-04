@@ -54,7 +54,6 @@ def main():
         # Create config
         config = MedicalGraphConfig(
             device=args.device,
-            use_reflection=True
         )
         
         # Initialize system
@@ -102,7 +101,6 @@ def main():
         # Create config
         config = MedicalGraphConfig(
             device=args.device,
-            use_reflection=True
         )
         
         # Initialize system

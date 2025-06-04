@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 
 """
-Medical AI System - Package Initialization
+Medical AI System - Package Initialization (MODIFIED)
 ----------------------------------------
-Initialization file for the Medical AI System package.
+initialization với multi-task support.
 """
 
 import logging
@@ -17,22 +17,23 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
-# Import main components
+# Import components
 from medical_ai_agents.config import MedicalGraphConfig, SystemState, TaskType
-from medical_ai_agents.main import MedicalAISystem
-# from medical_ai_agents.tools.rag.vector_search import VectorSearchTool
-# from medical_ai_agents.tools.rag.doc_retrieval import DocumentRetrievalTool
+from medical_ai_agents.main import EnhancedMedicalAISystem
+
+# Backward compatibility aliases
+MedicalAISystem = EnhancedMedicalAISystem  # For backward compatibility
+
 __all__ = [
     'MedicalGraphConfig',
-    'SystemState',
+    'SystemState', 
     'TaskType',
-    'MedicalAISystem',
-    # 'VectorSearchTool',
-    # 'DocumentRetrievalTool'
+    'MedicalAISystem',           # Backward compatibility
+    'EnhancedMedicalAISystem'    # New system
 ]
 
 # Define package version
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 # Silence specific loggers
 logging.getLogger("PIL").setLevel(logging.WARNING)

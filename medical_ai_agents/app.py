@@ -46,7 +46,6 @@ class MedicalAIConfig:
         },
         "medical_ai": {
             "device": "cuda",
-            "use_reflection": True,
             "detector_model_path": "medical_ai_agents/weights/detect_best.pt",
             "vqa_model_path": "medical_ai_agents/weights/llava-med-mistral-v1.5-7b",
             "modality_classifier_path": "medical_ai_agents/weights/modal_best.pt",
@@ -147,7 +146,6 @@ def create_enhanced_chatbot():
             """Khởi tạo Medical AI với config tùy chỉnh."""
             medical_config = MedicalGraphConfig(
                 device=self.app_config.get("medical_ai.device", "cuda"),
-                use_reflection=self.app_config.get("medical_ai.use_reflection", True),
                 detector_model_path=self.app_config.get("medical_ai.detector_model_path"),
                 vqa_model_path=self.app_config.get("medical_ai.vqa_model_path"),
                 modality_classifier_path=self.app_config.get("medical_ai.modality_classifier_path"),
