@@ -159,13 +159,16 @@ def post_region_router(state: SystemState) -> str:
     else:
         return "synthesizer"
 
-
 def post_vqa_router(state: SystemState) -> str:
-    """Enhanced router after VQA."""
+    """Enhanced router after VQA - FIXED VERSION"""
     logger = logging.getLogger("graph.routers.post_vqa")
     
-    # Mark VQA task as completed
-    state = _mark_task_completed(state, "medical_qa")
-        
+    print(f"🔧 DEBUG: post_vqa_router input - completed_tasks: {state.get('completed_tasks', [])}")
+    
+    # Mark medical_qa as completed
+    _mark_task_completed(state, "medical_qa")
+    
+    print(f"🔧 DEBUG: post_vqa_router after marking - completed_tasks: {state.get('completed_tasks', [])}")
+    
     logger.info("Going directly to synthesizer")
     return "synthesizer"

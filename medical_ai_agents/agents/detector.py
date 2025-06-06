@@ -39,9 +39,6 @@ class DetectorAgent(BaseAgent):
             {"step": 2, "action": "visualize_detections", "required": True},  # Always for synthesis
             {"step": 3, "action": "synthesis_with_visualization", "required": True}
         ]
-        
-        self.detector_tool = None
-        self.visualize_tool = None
     
     def _register_tools(self) -> List[BaseTool]:
         """Register detection tools."""
@@ -218,6 +215,16 @@ Begin Step 1 now:"""
         - Visualization image for review
         """
         try:
+            import base64
+            from PIL import Image
+            from io import BytesIO
+            
+            def image_to_base64(image_path):
+                with Image.open(image_path) as img:
+                    buffered = BytesIO()
+                    img.save(buffered, format="PNG")
+                    return base64.b64encode(buffered.getvalue()).decode()
+
             image_path = task_input.get("image_path", "")
             query = task_input.get("query", "")
             show_viz = task_input.get("show_visualization", False)
@@ -239,13 +246,16 @@ SYNTHESIS REQUIREMENTS:
 
 Please provide your final medical assessment:"""
 
+            # Convert original image to base64
+            img_b64 = image_to_base64(image_path)
+            
             # Create multimodal message (original image + visualization)
             messages = [
                 SystemMessage(content=self._get_agent_description()),
                 HumanMessage(
                     content=[
                         {"type": "text", "text": synthesis_prompt},
-                        {"type": "image_url", "image_url": {"url": f"file://{image_path}"}},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
                     ]
                 )
             ]

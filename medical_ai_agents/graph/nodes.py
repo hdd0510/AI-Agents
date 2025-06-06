@@ -209,13 +209,16 @@ def _determine_execution_order(required_tasks: List[str]) -> List[str]:
 
 # Task Progress Tracker
 def _mark_task_completed(state: SystemState, completed_task: str) -> SystemState:
-    """Mark a task as completed and update current task."""
-    completed_tasks = state.get("completed_tasks", [])
+    """Mark a task as completed - FIXED VERSION"""
+    
+    # CRITICAL: Don't create new dict, modify existing state
+    completed_tasks = list(state.get("completed_tasks", []))
     execution_order = state.get("execution_order", [])
     
     # Add to completed if not already there
     if completed_task not in completed_tasks:
-        completed_tasks = completed_tasks + [completed_task]
+        completed_tasks.append(completed_task)
+        print(f"🔧 DEBUG: Marked '{completed_task}' as completed. List: {completed_tasks}")
     
     # Find next task
     current_task = None
@@ -224,34 +227,41 @@ def _mark_task_completed(state: SystemState, completed_task: str) -> SystemState
             current_task = task
             break
     
-    return {
-        **state,
-        "completed_tasks": completed_tasks,
-        "current_task": current_task
-    }
-
+    # CRITICAL: Update the state object directly
+    state["completed_tasks"] = completed_tasks
+    state["current_task"] = current_task
+    
+    print(f"🔧 DEBUG: Updated state - completed: {completed_tasks}, current: {current_task}")
+    return state
 
 # Result Synthesizer
 def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
-    """synthesizer với multi-task awareness."""
+    """Result synthesizer with LLM-based natural language synthesis for all agent results"""
     logger = logging.getLogger("graph.nodes.synthesizer")
     
     required_tasks = state.get("required_tasks", [])
     completed_tasks = state.get("completed_tasks", [])
     task_type = state.get("task_type", TaskType.COMPREHENSIVE)
     
-    logger.info(f"Synthesizing multi-task results: Required={required_tasks}, Completed={completed_tasks}")
+    print(f"🔧 DEBUG: Synthesizer - Required: {required_tasks}, Completed: {completed_tasks}")
+    print(f"🔧 DEBUG: State keys: {list(state.keys())}")
     
-    # Collect results based on completed tasks
+    # Collect agent results
     agent_results = {}
-    if "polyp_detection" in completed_tasks and "detector_result" in state:
-        agent_results["detector_result"] = state["detector_result"]
-    if "modality_classification" in completed_tasks and "modality_result" in state:
-        agent_results["modality_result"] = state["modality_result"]
-    if "region_classification" in completed_tasks and "region_result" in state:
-        agent_results["region_result"] = state["region_result"]
-    if "medical_qa" in completed_tasks and "vqa_result" in state:
-        agent_results["vqa_result"] = state["vqa_result"]
+    if "vqa_result" in state:
+        vqa_result = state["vqa_result"]
+        if isinstance(vqa_result, dict) and vqa_result.get("success", False):
+            agent_results["vqa_result"] = vqa_result
+            if "medical_qa" not in completed_tasks:
+                completed_tasks = list(completed_tasks)
+                completed_tasks.append("medical_qa")
+                state["completed_tasks"] = completed_tasks
+    for result_key in ["detector_result", "modality_result", "region_result"]:
+        if result_key in state:
+            result_data = state[result_key]
+            if isinstance(result_data, dict) and result_data.get("success", False):
+                agent_results[result_key] = result_data
+    print(f"🔧 DEBUG: Final agent_results keys: {list(agent_results.keys())}")
     
     # Build final result
     final_result = {
@@ -260,28 +270,67 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
         "session_id": state.get("session_id", ""),
         "query": state.get("query", ""),
         "timestamp": time.time(),
-        
-        # Multi-task specific info
         "multi_task_analysis": {
             "required_tasks": required_tasks,
             "completed_tasks": completed_tasks,
             "execution_order": state.get("execution_order", []),
             "task_completion_rate": len(completed_tasks) / len(required_tasks) if required_tasks else 1.0
         },
-        
-        # Agent results
         "agent_results": agent_results,
-        
-        # Performance metrics
         "processing_time": time.time() - state.get("start_time", time.time())
     }
     
-    # Generate multi-task aware final answer
-    final_result["final_answer"] = _generate_multi_task_answer(final_result, llm)
-    
-    logger.info("multi-task synthesis complete")
+    # 1. If VQA exists, keep current logic
+    if agent_results.get("vqa_result"):
+        vqa_result = agent_results["vqa_result"]
+        vqa_answer = vqa_result.get("answer", "")
+        if vqa_answer and len(vqa_answer.strip()) > 5:
+            print(f"🔧 DEBUG: Using VQA answer as final_answer: {vqa_answer[:100]}...")
+            if task_type == TaskType.TEXT_ONLY:
+                final_result["final_answer"] = vqa_answer
+            else:
+                final_result["final_answer"] = f"🏥 **Medical Analysis:**\n{vqa_answer}\n\n⚠️ **Medical Disclaimer:** This AI analysis is for informational purposes. Please consult healthcare professionals for medical decisions."
+        else:
+            print(f"🔧 DEBUG: VQA answer empty, using disclaimer")
+            final_result["final_answer"] = "⚠️ **Medical Disclaimer:** This AI analysis is for informational purposes. Please consult healthcare professionals for medical decisions."
+    else:
+        # 2. Prefer agent-level LLM synthesis if available
+        natural_answers = []
+        for key, val in agent_results.items():
+            if isinstance(val, dict):
+                ans = val.get("analysis") or val.get("answer")
+                if ans and len(ans.strip()) > 10:
+                    natural_answers.append(f"--- {key.replace('_result','').title()} ---\n{ans}")
+        if natural_answers:
+            final_result["final_answer"] = "\n\n".join(natural_answers) + "\n\n⚠️ **Medical Disclaimer:** This AI analysis is for informational purposes. Please consult healthcare professionals for medical decisions."
+        else:
+            # 3. LLM synthesis for all agent results (as before)
+            print(f"🔧 DEBUG: No agent-level analysis, using LLM to synthesize all agent results")
+            prompt = """You are a medical AI assistant. Synthesize a comprehensive, natural language answer for the user based on the following structured results from multiple medical analysis agents. Explain findings clearly, mention confidence, and provide clinical recommendations if possible. Always include a medical disclaimer at the end.\n\n"""
+            for key, val in agent_results.items():
+                prompt += f"--- {key.replace('_result','').title()} ---\n"
+                for k, v in val.items():
+                    if k == "visualization_base64":
+                        continue
+                    prompt += f"{k}: {v}\n"
+                prompt += "\n"
+            prompt += "\nSynthesize the above into a single, clear, professional answer for the user.\n"
+            try:
+                messages = [
+                    {"role": "system", "content": "You are a medical AI assistant."},
+                    {"role": "user", "content": prompt}
+                ]
+                answer = llm.invoke(messages).content.strip()
+                if answer and len(answer) > 10:
+                    final_result["final_answer"] = f"🏥 **Medical Analysis:**\n{answer}\n\n⚠️ **Medical Disclaimer:** This AI analysis is for informational purposes. Please consult healthcare professionals for medical decisions."
+                else:
+                    final_result["final_answer"] = _generate_multi_task_answer(final_result, llm)
+            except Exception as e:
+                logger.error(f"LLM synthesis failed: {str(e)}")
+                final_result["final_answer"] = _generate_multi_task_answer(final_result, llm)
+    print(f"🔧 DEBUG: Final answer: {final_result.get('final_answer', '')[:200]}...")
+    logger.info("Synthesis complete with enhanced logic")
     return {**state, "final_result": final_result}
-
 
 def _generate_multi_task_answer(result: Dict[str, Any], llm: ChatOpenAI) -> str:
     """Generate answer highlighting multi-task execution."""

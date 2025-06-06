@@ -258,10 +258,12 @@ class MedicalAIChatbot:
                 analysis_result = result
                 
                 if result.get("success", False):
-                    # Create comprehensive response
+                    # Chỉ hiển thị final_answer nếu có
                     if "final_answer" in result:
                         response_parts.append("🔍 **Kết quả phân tích hình ảnh:**")
                         response_parts.append(result["final_answer"])
+                    else:
+                        response_parts.append("❌ Không có kết quả tổng hợp từ hệ thống. Vui lòng thử lại hoặc liên hệ hỗ trợ.")
                     
                     # Add detection details
                     if "agent_results" in result and "detector_result" in result["agent_results"]:

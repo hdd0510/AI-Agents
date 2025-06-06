@@ -9,7 +9,6 @@ Script khởi động chatbot với logic đã được simplified.
 # ---- PATCH Pydantic ↔ Starlette Request -------------------------------------
 from starlette.requests import Request as _StarletteRequest
 from pydantic_core import core_schema
-from typing import Any, Dict, Optional
 
 def _any_schema(*_):        # chấp mọi số đối số
     return core_schema.any_schema()
@@ -157,7 +156,7 @@ def create_enhanced_chatbot():
             return MedicalAISystem(medical_config)
         
         def process_message_streaming(self, message, image, history, username, session_state):
-            """FIXED streaming version with proper result extraction."""
+            """SIMPLIFIED streaming version - cleaned up logic."""
             import uuid
             
             # Generate session and user IDs
@@ -182,24 +181,29 @@ def create_enhanced_chatbot():
                     result = self.medical_ai.analyze(image_path=image, query=message)
                     
                     if result.get("success", False):
-                        response_parts = []
+                        response_parts = [f"🔍 **Analysis Results:**\n{result.get('final_answer', '')}"]
                         
-                        # FIXED: Extract VQA result first (primary result)
-                        vqa_answer = self._extract_vqa_answer(result)
-                        if vqa_answer:
-                            response_parts.append(f"🔍 **Medical Analysis:**\n{vqa_answer}")
+                        # FIXED: Check for visualization in agent_results
+                        if "agent_results" in result and "detector_result" in result["agent_results"]:
+                            detector = result["agent_results"]["detector_result"]
+                            
+                            if detector.get("visualization_available") and detector.get("visualization_base64"):
+                                # Create proper HTML img tag
+                                img_b64 = detector["visualization_base64"]
+                                img_html = f'''
+        <div style="margin: 10px 0; text-align: center;">
+            <p><strong>🎯 Visualization Result:</strong></p>
+            <img src="data:image/png;base64,{img_b64}" 
+                alt="Polyp Detection Results" 
+                style="max-width: 100%; height: auto; border-radius: 8px; 
+                        box-shadow: 0 2px 8px rgba(0,0,0,0.1); border: 1px solid #ddd;">
+        </div>'''
+                                response_parts.append(img_html)
+                                
+                                # Also save to session state for separate display
+                                session_state["last_visualization"] = img_b64
                         
-                        # FIXED: Extract detector visualization
-                        visualization_html = self._extract_visualization(result, session_state)
-                        if visualization_html:
-                            response_parts.append(visualization_html)
-                        
-                        # FIXED: Add summary info
-                        summary_info = self._extract_summary_info(result)
-                        if summary_info:
-                            response_parts.append(summary_info)
-                        
-                        final_response = "\n\n".join(response_parts) if response_parts else "✅ Phân tích hoàn tất."
+                        final_response = "\n\n".join(response_parts)
                         history[-1][1] = final_response
                         yield "", history, session_state
                                 
@@ -210,16 +214,16 @@ def create_enhanced_chatbot():
                         yield "", history, session_state
                 
                 else:
-                    # =============  TEXT-ONLY WORKFLOW =============
+                    # =============  TEXT-ONLY WORKFLOW (SIMPLIFIED) =============
                     logger.info(f"Processing text-only query: '{message[:50]}...'")
                     
                     history[-1][1] = "🧠 Đang tư vấn qua LLaVA..."
                     yield "", history, session_state
                     time.sleep(0.3)
                     
-                    # Call medical AI text-only
+                    # SIMPLIFIED: Call medical AI with clean parameters
                     result = self.medical_ai.analyze(
-                        image_path=None,
+                        image_path=None,  # No image - triggers text-only mode
                         query=message,
                         medical_context={
                             "user_context": context,
@@ -230,44 +234,63 @@ def create_enhanced_chatbot():
                     logger.debug(f"Text-only result: success={result.get('success', False)}")
                     
                     if result.get("success", False):
-                        # Extract VQA text-only response
-                        vqa_answer = self._extract_vqa_answer(result)
+                        # Stream LLaVA text-only response
+                        history[-1][1] = "📝 Đang tạo tư vấn..."
+                        yield "", history, session_state
+                        time.sleep(0.3)
                         
-                        if vqa_answer:
-                            # Stream the response
-                            history[-1][1] = "📝 Đang tạo tư vấn..."
-                            yield "", history, session_state
-                            time.sleep(0.3)
+                        # Check if VQA result is successful
+                        vqa_success = True
+                        if "agent_results" in result and "vqa_result" in result["agent_results"]:
+                            vqa_result = result["agent_results"]["vqa_result"]
+                            vqa_success = vqa_result.get("success", False)
                             
-                            streaming_text = "🧠 **Tư vấn y tế:**\n\n"
+                            if not vqa_success:
+                                # VQA/LLaVA failed - show safety error
+                                error_response = "❌ **Hệ thống tư vấn y tế gặp sự cố**\n\n"
+                                error_response += vqa_result.get("answer", "Lỗi không xác định trong quá trình tư vấn.")
+                                error_response += "\n\n🔄 **Vui lòng:**\n"
+                                error_response += "- Thử lại sau vài phút\n"
+                                error_response += "- Hoặc tham khảo bác sĩ trực tiếp nếu cần thiết"
+                                
+                                history[-1][1] = error_response
+                                yield "", history, session_state
+                                return  # Exit early
+                        
+                        # VQA succeeded - process response
+                        if vqa_success and "final_answer" in result:
+                            final_answer = result["final_answer"]
+                            streaming_text = "🧠 **Tư vấn y tế qua LLaVA:**\n\n"
                             
                             # Add context if available
                             if context:
                                 streaming_text += "💭 **Dựa trên thông tin trước đó:**\n"
                                 streaming_text += (context[:200] + "..." if len(context) > 200 else context) + "\n\n"
                             
-                            # Stream the medical consultation
-                            words = vqa_answer.split()
+                            # Stream the LLaVA medical consultation
+                            words = final_answer.split()
                             for i, word in enumerate(words):
                                 streaming_text += word + " "
-                                if i % 3 == 0:  # Update every 3 words
+                                if i % 3 == 0:  # Update every 3 words for smoother streaming
                                     history[-1][1] = streaming_text
                                     yield "", history, session_state
                                     time.sleep(0.05)
                             
-                            # Add processing info
+                            # Add LLaVA processing info
                             streaming_text += f"\n\n🔬 **Được xử lý bởi:** LLaVA-Med (Text-Only Mode)"
+                            streaming_text += f"\n📊 **Loại tư vấn:** Medical consultation without image"
                             
                             # Add medical disclaimer
                             streaming_text += f"\n\n⚠️ **Lưu ý quan trọng:**"
                             streaming_text += f"\n- Đây là tư vấn sơ bộ từ AI, không thay thế khám trực tiếp"
                             streaming_text += f"\n- Hãy tham khảo ý kiến bác sĩ chuyên khoa để có chẩn đoán chính xác"
+                            streaming_text += f"\n- Nếu có triệu chứng nghiêm trọng, hãy đến cơ sở y tế ngay lập tức"
                             
                             history[-1][1] = streaming_text.strip()
                             yield "", history, session_state
                             
                         else:
-                            # VQA failed or no answer
+                            # Fallback handling with safety checks
                             fallback_response = self._create_safe_fallback_response(result, context, message)
                             history[-1][1] = fallback_response
                             yield "", history, session_state
@@ -286,7 +309,7 @@ def create_enhanced_chatbot():
                     "response": final_response,
                     "has_image": has_image,
                     "analysis": result if 'result' in locals() else None,
-                    "polyp_count": self._extract_polyp_count(result) if 'result' in locals() else 0,
+                    "polyp_count": result.get("polyp_count", 0) if 'result' in locals() else 0,
                     "is_text_only": not has_image
                 }
                 
@@ -303,192 +326,6 @@ def create_enhanced_chatbot():
                 error_response = f"❌ Xin lỗi, có lỗi hệ thống xảy ra: {str(e)}"
                 history[-1][1] = error_response
                 yield "", history, session_state
-
-        def _extract_vqa_answer(self, result: Dict[str, Any]) -> Optional[str]:
-            """Extract VQA answer from result structure."""
-            try:
-                # Method 1: Check final_result first
-                if "final_result" in result and result["final_result"]:
-                    final_result = result["final_result"]
-                    if "final_answer" in final_result:
-                        return final_result["final_answer"]
-                
-                # Method 2: Check agent_results
-                if "agent_results" in result and "vqa_result" in result["agent_results"]:
-                    vqa_result = result["agent_results"]["vqa_result"]
-                    if vqa_result.get("success", False) and vqa_result.get("answer"):
-                        return vqa_result["answer"]
-                
-                # Method 3: Check direct VQA result
-                if "vqa_result" in result:
-                    vqa_result = result["vqa_result"]
-                    if vqa_result.get("success", False) and vqa_result.get("answer"):
-                        return vqa_result["answer"]
-                
-                # Method 4: Check legacy fields
-                if "final_answer" in result:
-                    return result["final_answer"]
-                
-                if "answer" in result:
-                    return result["answer"]
-                
-                logger.warning("No VQA answer found in result")
-                return None
-                
-            except Exception as e:
-                logger.error(f"Error extracting VQA answer: {str(e)}")
-                return None
-
-        def _extract_visualization(self, result: Dict[str, Any], session_state: Dict[str, Any]) -> Optional[str]:
-            """Extract visualization from detector results."""
-            try:
-                # Check agent_results structure
-                if "agent_results" in result and "detector_result" in result["agent_results"]:
-                    detector = result["agent_results"]["detector_result"]
-                elif "detector_result" in result:
-                    detector = result["detector_result"]
-                else:
-                    return None
-                
-                if detector.get("success", False) and detector.get("visualization_base64"):
-                    img_b64 = detector["visualization_base64"]
-                    
-                    # Create HTML img tag
-                    img_html = f'''
-<div style="margin: 10px 0; text-align: center;">
-    <p><strong>🎯 Kết quả phát hiện polyp:</strong></p>
-    <img src="data:image/png;base64,{img_b64}" 
-        alt="Polyp Detection Results" 
-        style="max-width: 100%; height: auto; border-radius: 8px; 
-                box-shadow: 0 2px 8px rgba(0,0,0,0.1); border: 1px solid #ddd;">
-</div>'''
-                    
-                    # Save to session state
-                    session_state["last_visualization"] = img_b64
-                    session_state["has_image_result"] = True
-                    
-                    return img_html
-                
-                return None
-                
-            except Exception as e:
-                logger.error(f"Error extracting visualization: {str(e)}")
-                return None
-
-        def _extract_summary_info(self, result: Dict[str, Any]) -> Optional[str]:
-            """Extract summary information from all agents."""
-            try:
-                summary_parts = []
-                
-                # Check for detector info
-                detector_result = None
-                if "agent_results" in result and "detector_result" in result["agent_results"]:
-                    detector_result = result["agent_results"]["detector_result"]
-                elif "detector_result" in result:
-                    detector_result = result["detector_result"]
-                
-                if detector_result and detector_result.get("success", False):
-                    count = detector_result.get("count", 0)
-                    if count > 0:
-                        summary_parts.append(f"📊 **Phát hiện:** {count} polyp(s)")
-                        
-                        # Add confidence info
-                        objects = detector_result.get("objects", [])
-                        if objects and len(objects) > 0:
-                            top_confidence = objects[0].get("confidence", 0)
-                            summary_parts.append(f"🎯 **Độ tin cậy:** {top_confidence:.1%}")
-                    else:
-                        summary_parts.append("✅ **Không phát hiện polyp**")
-                
-                # Check for modality info
-                if "agent_results" in result and "modality_result" in result["agent_results"]:
-                    modality = result["agent_results"]["modality_result"]
-                    if modality.get("success", False):
-                        modality_type = modality.get("class_name", "Unknown")
-                        confidence = modality.get("confidence", 0)
-                        summary_parts.append(f"📸 **Kỹ thuật:** {modality_type} ({confidence:.1%})")
-                
-                # Check for region info
-                if "agent_results" in result and "region_result" in result["agent_results"]:
-                    region = result["agent_results"]["region_result"]
-                    if region.get("success", False):
-                        region_name = region.get("class_name", "Unknown")
-                        confidence = region.get("confidence", 0)
-                        summary_parts.append(f"📍 **Vị trí:** {region_name} ({confidence:.1%})")
-                
-                if summary_parts:
-                    return "📋 **Tóm tắt kết quả:**\n" + "\n".join(f"• {part}" for part in summary_parts)
-                
-                return None
-                
-            except Exception as e:
-                logger.error(f"Error extracting summary info: {str(e)}")
-                return None
-
-        def _extract_polyp_count(self, result: Dict[str, Any]) -> int:
-            """Extract polyp count for memory storage."""
-            try:
-                # Check detector result
-                if "agent_results" in result and "detector_result" in result["agent_results"]:
-                    detector = result["agent_results"]["detector_result"]
-                elif "detector_result" in result:
-                    detector = result["detector_result"]
-                else:
-                    return 0
-                
-                if detector.get("success", False):
-                    return detector.get("count", 0)
-                
-                return 0
-                
-            except Exception as e:
-                logger.error(f"Error extracting polyp count: {str(e)}")
-                return 0
-
-        def _create_safe_fallback_response(self, result, context, message):
-            """Create safe fallback response cho text-only queries."""
-            fallback_response = "🧠 **Tư vấn y tế:**\n\n"
-            
-            # Add context if available
-            if context:
-                fallback_response += f"💭 **Dựa trên thông tin trước đó:**\n{context[:200]}...\n\n"
-            
-            # Check for any partial results
-            if result.get("agent_results"):
-                agent_results = result["agent_results"]
-                if "vqa_result" in agent_results:
-                    vqa_result = agent_results["vqa_result"]
-                    if vqa_result.get("error"):
-                        fallback_response += f"⚠️ **Hệ thống gặp sự cố:** {vqa_result['error']}\n\n"
-            
-            # Customize based on message content
-            if any(greeting in message.lower() for greeting in ["hello", "hi", "xin chào", "chào"]):
-                fallback_response += "Xin chào! Tôi là trợ lý AI y tế chuyên hỗ trợ phân tích hình ảnh nội soi.\n\n"
-                fallback_response += "🔬 **Tôi có thể giúp bạn:**\n"
-                fallback_response += "- Phân tích hình ảnh nội soi đại tràng\n"
-                fallback_response += "- Phát hiện polyp và các bất thường\n"
-                fallback_response += "- Trả lời câu hỏi về y tế tiêu hóa\n\n"
-                fallback_response += "Bạn có thể tải lên hình ảnh nội soi hoặc đặt câu hỏi cụ thể để tôi hỗ trợ tốt hơn."
-            else:
-                fallback_response += "Cảm ơn bạn đã đưa ra câu hỏi. Để tôi có thể hỗ trợ tốt nhất:\n\n"
-                fallback_response += "📋 **Khuyến nghị:**\n"
-                fallback_response += "1. Mô tả chi tiết hơn về triệu chứng bạn gặp phải\n"
-                fallback_response += "2. Tải lên hình ảnh nội soi nếu có\n"
-                fallback_response += "3. Đặt câu hỏi cụ thể về vấn đề sức khỏe\n\n"
-                fallback_response += "🏥 **Lưu ý:** Tôi là trợ lý AI hỗ trợ, không thay thế khám bác sĩ."
-            
-            return fallback_response
-        
-        def _create_system_error_response(self, message):
-            """Create system error response."""
-            error_response = "❌ **Hệ thống tạm thời gặp sự cố**\n\n"
-            error_response += "Xin lỗi vì sự bất tiện này. Hệ thống AI hiện không thể xử lý yêu cầu của bạn.\n\n"
-            error_response += "🔄 **Bạn có thể:**\n"
-            error_response += "- Thử lại sau vài phút\n"
-            error_response += "- Đặt lại câu hỏi với từ ngữ khác\n"
-            error_response += "- Tải lên hình ảnh để phân tích trực quan\n\n"
-            error_response += "🏥 **Nếu cần tư vấn gấp:** Vui lòng liên hệ bác sĩ chuyên khoa trực tiếp."
-            return error_response
         
         def _create_safe_fallback_response(self, result, context, message):
             """Create safe fallback response for text-only queries."""

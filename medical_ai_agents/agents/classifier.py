@@ -273,9 +273,8 @@ Choose your adaptive strategy and proceed:"""
         }
 
     def _format_agent_result(self, react_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Format guided adaptive classifier result."""
+        """Format guided adaptive classifier result with LLM-based natural language synthesis."""
         result_key = f"{self.classifier_type}_result"
-        
         if not react_result.get("success", False):
             return {
                 result_key: {
@@ -285,14 +284,12 @@ Choose your adaptive strategy and proceed:"""
                     "core_requirements_met": self._check_core_requirements(react_result)
                 }
             }
-        
         # Extract classification results from ReAct history
         class_name = "Unknown"
         confidence = 0.0
         all_classes = {}
         description = ""
         strategy_used = "unknown"
-        
         for step in self.react_history:
             if step.observation and self.classifier_type in str(step.action):
                 try:
@@ -305,8 +302,6 @@ Choose your adaptive strategy and proceed:"""
                         break
                 except json.JSONDecodeError:
                     continue
-        
-        # Determine strategy used based on number of steps
         steps_used = len(self.react_history)
         if steps_used <= 2:
             strategy_used = "direct_approach"
@@ -314,16 +309,13 @@ Choose your adaptive strategy and proceed:"""
             strategy_used = "validation_approach"
         else:
             strategy_used = "thorough_approach"
-        
-        # Check core requirements
         requirements_met = self._check_core_requirements(react_result)
-        
-        # Build result with TEXT-ONLY synthesis (no image viewing)
-        synthesis_analysis = self._perform_text_synthesis(
-            class_name, confidence, all_classes, 
-            react_result.get("answer", ""), requirements_met
-        )
-        
+        # LLM-based synthesis
+        prompt = f"""Bạn là chuyên gia nội soi. Hãy giải thích kết quả phân loại sau cho bệnh nhân một cách dễ hiểu và chuyên nghiệp:\n\n- Kết quả: {class_name}\n- Độ tin cậy: {confidence:.1%}\n- Các lớp khác: {all_classes}\n- Mô tả: {description}\n\nHãy đưa ra nhận định lâm sàng, ý nghĩa kết quả và khuyến nghị nếu có."""
+        try:
+            llm_answer = self.llm.invoke([{"role": "user", "content": prompt}]).content.strip()
+        except Exception as e:
+            llm_answer = "Không thể tạo nhận định tự động: " + str(e)
         classifier_result = {
             "success": True,
             "approach": "guided_adaptive",
@@ -332,20 +324,17 @@ Choose your adaptive strategy and proceed:"""
             "confidence": confidence,
             "description": description,
             "all_classes": all_classes,
-            "analysis": synthesis_analysis,
+            "analysis": llm_answer,
             "core_requirements_met": requirements_met,
             "steps_used": steps_used,
-            "synthesis_method": "text_only"  # No image viewing
+            "synthesis_method": "llm_natural_language"
         }
-        
-        # Add domain-specific insights
         if self.classifier_type == "modality":
             classifier_result["clinical_advantages"] = self._get_modality_advantages(class_name)
             classifier_result["recommended_usage"] = self._get_modality_recommendations(class_name)
-        else:  # region
+        else:
             classifier_result["anatomical_significance"] = self._get_region_significance(class_name)
             classifier_result["pathology_risk"] = self._get_region_risk(class_name)
-        
         return {result_key: classifier_result}
 
     def _perform_text_synthesis(self, class_name: str, confidence: float, 

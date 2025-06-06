@@ -131,6 +131,9 @@ class EnhancedMedicalAISystem:
                 if "region_result" in final_state:
                     agent_results["region_result"] = final_state["region_result"]
                 if "vqa_result" in final_state:
+                    print('-'*100)
+                    print(final_state["vqa_result"])
+                    print('-'*100)
                     agent_results["vqa_result"] = final_state["vqa_result"]
                 
                 fallback_result["agent_results"] = agent_results
