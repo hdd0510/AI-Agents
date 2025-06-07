@@ -10,10 +10,11 @@ Synthesis without looking at images (text-only analysis)
 
 import json
 import logging
-from typing import Dict, Any, List, Optional
+import re
+from typing import Dict, Any, List, Optional, Tuple
 from langchain_core.messages import SystemMessage, HumanMessage
 
-from medical_ai_agents.agents.base_agent import BaseAgent, ThoughtType
+from medical_ai_agents.agents.base_agent import BaseAgent, ThoughtType, ReActStep
 from medical_ai_agents.tools.base_tools import BaseTool
 from medical_ai_agents.tools.classifier.cls_tools import ClassifierTool
 
@@ -77,41 +78,36 @@ SYNTHESIS: I analyze tool results without looking at images (text-only synthesis
 Classes I can identify: {', '.join(self.class_names)}"""
 
     def _get_system_prompt(self) -> str:
-        """Guided adaptive system prompt."""
+        """Guided adaptive system prompt with strict final answer formatting."""
         return f"""You are a GUIDED ADAPTIVE {self.classifier_type} classification expert.
 
 CORE REQUIREMENTS (MUST achieve):
-1. ✓ Complete classification using {self.classifier_type}_classifier tool
-2. ✓ Assess confidence level in results
-3. ✓ Validate result quality
+1. Complete classification using {self.classifier_type}_classifier tool
+2. Assess confidence level in results
+3. Validate result quality
 
-ADAPTIVE STRATEGIES (choose based on situation):
+ADAPTIVE STRATEGIES:
+- Direct approach for clear images (fastest)
+- Validation approach for uncertain cases
+- Thorough approach for complex images
 
-STRATEGY A - Direct Approach (efficient):
-Thought: I'll classify directly and assess the confidence
-Action: {self.classifier_type}_classifier
-Action Input: {{"image_path": "<path>"}}
-[If confidence ≥ 70%] → Final Answer
+STRICT REACT FORMAT:
+Every step MUST follow this exact format:
+Thought: [your reasoning]
+Action: [tool name or "Final Answer"]
+Action Input: [JSON parameters]
 
-STRATEGY B - Validation Approach (cautious):
-Thought: I'll classify and validate the result quality
-Action: {self.classifier_type}_classifier  
-Action Input: {{"image_path": "<path>"}}
-[Analyze results, if uncertain] → Re-classify or get second opinion
-Final Answer: [Validated result]
+FINAL STEP FORMAT:
+You MUST end with EXACTLY this format (use Final Answer with capital letters):
 
-STRATEGY C - Thorough Approach (complex cases):
-Thought: This seems complex, I'll do comprehensive analysis
-Action: {self.classifier_type}_classifier
-Action Input: {{"image_path": "<path>"}}
-[Additional analysis steps if needed]
-Final Answer: [Thorough assessment]
+Thought: [your final analysis]
+Action: Final Answer
+Action Input: {{
+  "answer": {{"class_name": "[class]", "confidence": "[percentage]", "explanation": "[reason]"}}
+}}
 
-GUIDELINES:
-- Choose strategy based on image complexity and initial results
-- If confidence < 70%, consider additional analysis
-- Maximum {self.max_iterations} steps total
-- Always end with Final Answer containing validated classification
+DO NOT deviate from this format or your analysis will be rejected.
+NEVER use "Final Answer:" as a standalone line - it MUST be "Action: Final Answer".
 
 Available tools: {self.tool_descriptions}
 Classes: {', '.join(self.class_names)}
@@ -205,10 +201,10 @@ Choose your strategy and start:"""
         # Classification-specific task description
         if classifier_type == "modality":
             task_desc = """Classify the endoscopy imaging modality/technique:
-- WLI (White Light Imaging): Standard white light endoscopy
-- BLI (Blue Light Imaging): Enhanced blood vessel visualization  
-- FICE (Flexible spectral Imaging Color Enhancement): Digital chromoendoscopy
-- LCI (Linked Color Imaging): Enhanced color contrast imaging"""
+- WLI (White Light Imaging): Thực tế là LCI - Enhanced visualization with color contrast for lesion detection
+- BLI (Blue Light Imaging): Thực tế là WLI - Standard visualization technique
+- FICE (Flexible spectral Imaging Color Enhancement): Thực tế là BLI - Enhanced visualization of blood vessels and surface patterns
+- LCI (Linked Color Imaging): Thực tế là FICE - Digital chromoendoscopy for mucosal assessment"""
         else:  # region
             task_desc = """Classify the anatomical region in the GI tract:
 - Hau_hong (Pharynx): Throat region
@@ -273,7 +269,7 @@ Choose your adaptive strategy and proceed:"""
         }
 
     def _format_agent_result(self, react_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Format guided adaptive classifier result with LLM-based natural language synthesis."""
+        """Format guided adaptive classifier result with standardized output parsing."""
         result_key = f"{self.classifier_type}_result"
         if not react_result.get("success", False):
             return {
@@ -284,24 +280,51 @@ Choose your adaptive strategy and proceed:"""
                     "core_requirements_met": self._check_core_requirements(react_result)
                 }
             }
+            
         # Extract classification results from ReAct history
         class_name = "Unknown"
         confidence = 0.0
         all_classes = {}
         description = ""
+        final_answer_data = {}
         strategy_used = "unknown"
-        for step in self.react_history:
-            if step.observation and self.classifier_type in str(step.action):
-                try:
-                    obs_data = json.loads(step.observation)
-                    if obs_data.get("success", False):
-                        class_name = obs_data.get("class_name", "Unknown")
-                        confidence = obs_data.get("confidence", 0.0)
-                        all_classes = obs_data.get("all_classes", {})
-                        description = obs_data.get("description", "")
-                        break
-                except json.JSONDecodeError:
-                    continue
+        
+        # First check if final answer contains structured data
+        if react_result.get("answer") and isinstance(react_result["answer"], dict):
+            final_answer_data = react_result["answer"]
+            if "class_name" in final_answer_data:
+                class_name = final_answer_data["class_name"]
+            if "confidence" in final_answer_data:
+                # Handle confidence as string (percentage) or float
+                conf_val = final_answer_data["confidence"]
+                if isinstance(conf_val, str) and "%" in conf_val:
+                    try:
+                        confidence = float(conf_val.replace("%", "")) / 100.0
+                    except:
+                        pass
+                else:
+                    try:
+                        confidence = float(conf_val)
+                    except:
+                        pass
+            if "explanation" in final_answer_data:
+                description = final_answer_data["explanation"]
+        
+        # If no structured data in final answer, get from tool observation
+        if class_name == "Unknown":
+            for step in self.react_history:
+                if step.observation and self.classifier_type in str(step.action):
+                    try:
+                        obs_data = json.loads(step.observation)
+                        if obs_data.get("success", False):
+                            class_name = obs_data.get("class_name", "Unknown")
+                            confidence = obs_data.get("confidence", 0.0)
+                            all_classes = obs_data.get("all_classes", {})
+                            description = obs_data.get("description", "")
+                            break
+                    except json.JSONDecodeError:
+                        continue
+                        
         steps_used = len(self.react_history)
         if steps_used <= 2:
             strategy_used = "direct_approach"
@@ -309,13 +332,16 @@ Choose your adaptive strategy and proceed:"""
             strategy_used = "validation_approach"
         else:
             strategy_used = "thorough_approach"
+            
         requirements_met = self._check_core_requirements(react_result)
+        
         # LLM-based synthesis
         prompt = f"""Bạn là chuyên gia nội soi. Hãy giải thích kết quả phân loại sau cho bệnh nhân một cách dễ hiểu và chuyên nghiệp:\n\n- Kết quả: {class_name}\n- Độ tin cậy: {confidence:.1%}\n- Các lớp khác: {all_classes}\n- Mô tả: {description}\n\nHãy đưa ra nhận định lâm sàng, ý nghĩa kết quả và khuyến nghị nếu có."""
         try:
             llm_answer = self.llm.invoke([{"role": "user", "content": prompt}]).content.strip()
         except Exception as e:
             llm_answer = "Không thể tạo nhận định tự động: " + str(e)
+            
         classifier_result = {
             "success": True,
             "approach": "guided_adaptive",
@@ -327,14 +353,17 @@ Choose your adaptive strategy and proceed:"""
             "analysis": llm_answer,
             "core_requirements_met": requirements_met,
             "steps_used": steps_used,
-            "synthesis_method": "llm_natural_language"
+            "synthesis_method": "llm_natural_language",
+            "final_answer_format": "structured" if final_answer_data else "unstructured"
         }
+        
         if self.classifier_type == "modality":
             classifier_result["clinical_advantages"] = self._get_modality_advantages(class_name)
             classifier_result["recommended_usage"] = self._get_modality_recommendations(class_name)
         else:
             classifier_result["anatomical_significance"] = self._get_region_significance(class_name)
             classifier_result["pathology_risk"] = self._get_region_risk(class_name)
+            
         return {result_key: classifier_result}
 
     def _perform_text_synthesis(self, class_name: str, confidence: float, 
@@ -401,20 +430,20 @@ Synthesis Method: Text-only analysis of tool results (no image review required)"
     def _get_modality_advantages(self, modality: str) -> List[str]:
         """Get clinical advantages of imaging modality."""
         advantages_map = {
-            "WLI": ["Standard visualization", "Natural colors", "General screening", "Baseline reference"],
-            "BLI": ["Enhanced vasculature", "Better lesion detection", "Improved contrast", "Surface pattern analysis"],
-            "FICE": ["Digital enhancement", "Customizable settings", "Color difference detection", "Inflammatory assessment"],
-            "LCI": ["Enhanced color contrast", "Better inflammation visualization", "Improved polyp detection", "Subtle lesion detection"]
+            "WLI": ["Enhanced color contrast", "Better inflammation visualization", "Improved polyp detection", "Subtle lesion detection"],  # WLI thực tế là LCI
+            "BLI": ["Standard visualization", "Natural colors", "General screening", "Baseline reference"],  # BLI thực tế là WLI
+            "FICE": ["Enhanced vasculature", "Better lesion detection", "Improved contrast", "Surface pattern analysis"],  # FICE thực tế là BLI
+            "LCI": ["Digital enhancement", "Customizable settings", "Color difference detection", "Inflammatory assessment"]  # LCI thực tế là FICE
         }
         return advantages_map.get(modality, ["Standard endoscopic visualization"])
     
     def _get_modality_recommendations(self, modality: str) -> List[str]:
         """Get usage recommendations for modality."""
         recommendations_map = {
-            "WLI": ["Initial screening", "General procedures", "Documentation baseline", "When specialized unavailable"],
-            "BLI": ["Suspicious lesions", "Detailed assessment", "Polyp characterization", "High-risk surveillance"],
-            "FICE": ["Flat lesions", "Inflammatory changes", "Chromoendoscopy needs", "Surface pattern analysis"],
-            "LCI": ["High-risk screening", "Subtle lesions", "Healing assessment", "Enhanced adenoma detection"]
+            "WLI": ["High-risk screening", "Subtle lesions", "Healing assessment", "Enhanced adenoma detection"],  # WLI thực tế là LCI
+            "BLI": ["Initial screening", "General procedures", "Documentation baseline", "When specialized unavailable"],  # BLI thực tế là WLI
+            "FICE": ["Suspicious lesions", "Detailed assessment", "Polyp characterization", "High-risk surveillance"],  # FICE thực tế là BLI
+            "LCI": ["Flat lesions", "Inflammatory changes", "Chromoendoscopy needs", "Surface pattern analysis"]  # LCI thực tế là FICE
         }
         return recommendations_map.get(modality, ["Consult endoscopist for optimal technique"])
     
@@ -450,12 +479,183 @@ Synthesis Method: Text-only analysis of tool results (no image review required)"
         }
         return risk_map.get(region, {"cancer_risk": "Variable", "common_pathology": "Various conditions"})
 
+    def _run_react_loop(self, task_input: Dict[str, Any]) -> Dict[str, Any]:
+        """Custom ReAct loop with better final answer handling for classifier."""
+        self.react_history = []
+        
+        for i in range(1, self.max_iterations + 1):
+            # Get LLM response
+            resp = self.llm.invoke(self._create_react_messages(task_input)).content
+            print(f"🔧 DEBUG: resp {i} {resp}")
+            
+            # Parse response
+            t, a, inp = self._parse_llm_response(resp)
+            print(f"🔧 DEBUG: t {i} {t[:50] if t else 'None'}")
+            print(f"🔧 DEBUG: a {i} {a}")
+            print(f"🔧 DEBUG: inp {i} {inp}")
+            
+            # Extra fallback for thought being None
+            if not t:
+                t = f"Processing classification step {i}"
+                print(f"🔧 DEBUG: Using fallback thought: {t}")
+                
+            # Extra fallback for action being None
+            if not a and "final answer" in resp.lower():
+                a = "Final Answer"
+                if not inp:
+                    inp = {"answer": resp.split("final answer", 1)[1].strip(), "fallback": True}
+                print(f"🔧 DEBUG: Using fallback action 'Final Answer' from text")
+                
+            if not t or not a:
+                print(f"🔧 DEBUG: Invalid response, skipping iteration {i}")
+                continue
+                
+            # Create step
+            step = ReActStep(
+                thought=t, 
+                thought_type=ThoughtType.INITIAL if i == 1 else ThoughtType.REASONING,
+                action=a,
+                action_input=inp
+            )
+            
+            # Handle final answer with more flexibility
+            print(f"🔧 DEBUG: Checking final answer condition: '{a.lower() if a else 'None'}'")
+            if a and a.lower() in ["final answer", "final_answer"]:
+                print(f"🔧 DEBUG: Final Answer detected!")
+                step.thought_type = ThoughtType.CONCLUSION
+                self.react_history.append(step)
+                
+                # Extract answer from input or use thought as fallback
+                if inp and "answer" in inp:
+                    answer = inp["answer"]
+                    print(f"🔧 DEBUG: Using answer from input: {str(answer)[:50]}...")
+                else:
+                    answer = t
+                    print(f"🔧 DEBUG: Using thought as fallback answer: {str(answer)[:50]}...")
+                
+                return {
+                    "success": True, 
+                    "answer": answer, 
+                    "history": self._serialize_history(),
+                    "iterations_used": i,
+                    "termination_reason": "final_answer"
+                }
+                
+            # Normal tool execution
+            print(f"🔧 DEBUG: Executing tool: {a}")
+            obs = self._execute_tool(a, inp or {})
+            step.observation = obs
+            step.thought_type = ThoughtType.OBSERVATION
+            self.react_history.append(step)
+            task_input[f"obs_{i}"] = obs
+            
+            print(f"🔧 DEBUG: ReAct iteration {i} completed")
+            print(f"🔧 DEBUG: Thought: {t[:50]}...")
+            print(f"🔧 DEBUG: Action: {a}")
+            print(f"🔧 DEBUG: Observation: {obs[:100]}...")
+            
+            # Check if observation has high confidence classification
+            try:
+                obs_data = json.loads(obs)
+                if obs_data.get("success") and obs_data.get("confidence", 0) >= 0.8:
+                    # Add a hint to LLM that this is a good time for final answer
+                    task_input["high_confidence_found"] = True
+                    print(f"🔧 DEBUG: High confidence found, adding hint for final answer")
+            except Exception as e:
+                print(f"🔧 DEBUG: Error parsing observation: {str(e)}")
+                
+        # Max iterations reached
+        print(f"🔧 DEBUG: Max iterations reached without final answer")
+        return {"success": False, "error": "Max iterations reached", "history": self._serialize_history()}
+
+    def _parse_llm_response(self, txt: str) -> Tuple[Optional[str], Optional[str], Optional[Dict[str, Any]]]:
+        """Parse LLM response with debugging for Thought extraction."""
+        txt = txt.strip()
+        print(f"🔍 DEBUG: Raw LLM response: {txt[:100]}...")
+        
+        # More flexible Thought extraction - try multiple patterns
+        thought_val = None
+        
+        # Pattern 1: Standard "Thought:" prefix
+        thought_match = re.search(r"Thought:\s*(.+?)(?=Action:|Final Answer:|$)", txt, re.DOTALL | re.IGNORECASE)
+        if thought_match:
+            thought_val = thought_match.group(1).strip()
+            print(f"🔍 DEBUG: Found thought with pattern 1: {thought_val[:50]}...")
+        
+        # Pattern 2: Beginning of text until Action/Final Answer
+        if not thought_val:
+            beginning_match = re.search(r"^(.*?)(?=Action:|Final Answer:|$)", txt, re.DOTALL)
+            if beginning_match and beginning_match.group(1).strip():
+                thought_val = beginning_match.group(1).strip()
+                print(f"🔍 DEBUG: Found thought with pattern 2: {thought_val[:50]}...")
+        
+        # Pattern 3: If still no thought, take first paragraph as thought
+        if not thought_val:
+            paragraphs = txt.split("\n\n")
+            if paragraphs:
+                thought_val = paragraphs[0].strip()
+                print(f"🔍 DEBUG: Using first paragraph as thought: {thought_val[:50]}...")
+                
+        # If still no thought, use a default
+        if not thought_val:
+            thought_val = "Processing classification"
+            print(f"🔍 DEBUG: Using default thought: {thought_val}")
+            
+        # Look for Final Answer 
+        final_answer_pattern = re.search(r"(Final Answer:|Final answer:|FINAL ANSWER:|final answer:)\s*(.*?)(?=$)", txt, re.DOTALL | re.IGNORECASE)
+        
+        if final_answer_pattern:
+            print(f"🔍 DEBUG: Found Final Answer pattern")
+            # Found Final Answer
+            action_val = "Final Answer"  # Use exact match for ReAct
+            answer_content = final_answer_pattern.group(2).strip()
+            
+            # Check if answer content looks like JSON
+            if answer_content.startswith('{') and answer_content.endswith('}'):
+                try:
+                    answer_data = json.loads(answer_content)
+                    input_val = {"answer": answer_data}
+                    print(f"🔍 DEBUG: Parsed JSON from Final Answer")
+                except json.JSONDecodeError:
+                    input_val = {"answer": answer_content}
+                    print(f"🔍 DEBUG: Using plain text from Final Answer (JSON parse failed)")
+            else:
+                input_val = {"answer": answer_content}
+                print(f"🔍 DEBUG: Using plain text from Final Answer")
+                
+            return thought_val, action_val, input_val
+         
+        # Normal Action pattern
+        action_match = re.search(r"Action:\s*(.+?)(?=Action Input:|$)", txt, re.DOTALL | re.IGNORECASE)
+        action_val = None
+        if action_match:
+            action_val = action_match.group(1).strip()
+            print(f"🔍 DEBUG: Found action: {action_val}")
+            
+            # Check if action is some variant of "Final Answer"
+            if action_val and re.search(r"final\s*answer", action_val, re.IGNORECASE):
+                action_val = "Final Answer"  # Normalize for ReAct
+                print(f"🔍 DEBUG: Normalized action to 'Final Answer'")
+        
+        # Extract Action Input
+        input_val = None
+        a_input = re.search(r"Action Input:\s*(\{.+?\})", txt, re.DOTALL)
+        if a_input:
+            try:
+                input_val = json.loads(a_input.group(1))
+                print(f"🔍 DEBUG: Parsed action input JSON")
+            except Exception as e:
+                print(f"🔍 DEBUG: Failed to parse action input JSON: {str(e)}")
+                
+        print(f"🔍 FINAL PARSE RESULT - thought: {'Found' if thought_val else 'None'}, action: {action_val}")
+        return thought_val, action_val, input_val
+
 # ===== USAGE EXAMPLE =====
 def test_guided_adaptive_classifier():
     """Test guided adaptive classifier."""
     
     # Test modality classifier
-    modality_classifier = GuidedAdaptiveClassifierAgent(
+    modality_classifier = ClassifierAgent(
         model_path="medical_ai_agents/weights/modal_best.pt",
         class_names=["WLI", "BLI", "FICE", "LCI"],
         classifier_type="modality",

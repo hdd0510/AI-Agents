@@ -236,32 +236,42 @@ def _mark_task_completed(state: SystemState, completed_task: str) -> SystemState
 
 # Result Synthesizer
 def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
-    """Result synthesizer with LLM-based natural language synthesis for all agent results"""
-    logger = logging.getLogger("graph.nodes.synthesizer")
+    """Synthesize results from all agents into a final answer."""
+    import time
+    logger = logging.getLogger("med.ai.synthesizer")
     
-    required_tasks = state.get("required_tasks", [])
-    completed_tasks = state.get("completed_tasks", [])
-    task_type = state.get("task_type", TaskType.COMPREHENSIVE)
+    task_type = state.get("task_type", "unknown")
+    logger.info(f"Synthesizing results for task_type: {task_type}")
     
-    print(f"🔧 DEBUG: Synthesizer - Required: {required_tasks}, Completed: {completed_tasks}")
-    print(f"🔧 DEBUG: State keys: {list(state.keys())}")
-    
-    # Collect agent results
+    # Get all agent results
     agent_results = {}
-    if "vqa_result" in state:
-        vqa_result = state["vqa_result"]
-        if isinstance(vqa_result, dict) and vqa_result.get("success", False):
-            agent_results["vqa_result"] = vqa_result
-            if "medical_qa" not in completed_tasks:
-                completed_tasks = list(completed_tasks)
-                completed_tasks.append("medical_qa")
-                state["completed_tasks"] = completed_tasks
-    for result_key in ["detector_result", "modality_result", "region_result"]:
-        if result_key in state:
-            result_data = state[result_key]
-            if isinstance(result_data, dict) and result_data.get("success", False):
-                agent_results[result_key] = result_data
-    print(f"🔧 DEBUG: Final agent_results keys: {list(agent_results.keys())}")
+    for key, val in state.items():
+        if key.endswith("_result") and isinstance(val, dict):
+            agent_results[key] = val
+
+    # Identify required and completed tasks
+    required_tasks = []
+    completed_tasks = []
+    
+    if task_type == "polyp_detection":
+        required_tasks = ["detector"]
+        if "detector_result" in agent_results:
+            if agent_results["detector_result"].get("success", False):
+                completed_tasks.append("detector")
+    
+    elif task_type == "medical_vqa":
+        required_tasks = ["vqa"]
+        if "vqa_result" in agent_results:
+            if agent_results["vqa_result"].get("success", False):
+                completed_tasks.append("vqa")
+    
+    elif task_type == "comprehensive":
+        required_tasks = ["detector", "modality", "region", "vqa"]
+        for task in required_tasks:
+            result_key = f"{task}_result"
+            if result_key in agent_results:
+                if agent_results[result_key].get("success", False):
+                    completed_tasks.append(task)
     
     # Build final result
     final_result = {
@@ -280,118 +290,191 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
         "processing_time": time.time() - state.get("start_time", time.time())
     }
     
-    # 1. If VQA exists, keep current logic
-    if agent_results.get("vqa_result"):
-        vqa_result = agent_results["vqa_result"]
-        vqa_answer = vqa_result.get("answer", "")
-        if vqa_answer and len(vqa_answer.strip()) > 5:
-            print(f"🔧 DEBUG: Using VQA answer as final_answer: {vqa_answer[:100]}...")
-            if task_type == TaskType.TEXT_ONLY:
-                final_result["final_answer"] = vqa_answer
-            else:
-                final_result["final_answer"] = f"🏥 **Medical Analysis:**\n{vqa_answer}\n\n⚠️ **Medical Disclaimer:** This AI analysis is for informational purposes. Please consult healthcare professionals for medical decisions."
-        else:
-            print(f"🔧 DEBUG: VQA answer empty, using disclaimer")
-            final_result["final_answer"] = "⚠️ **Medical Disclaimer:** This AI analysis is for informational purposes. Please consult healthcare professionals for medical decisions."
-    else:
-        # 2. Prefer agent-level LLM synthesis if available
-        natural_answers = []
-        for key, val in agent_results.items():
-            if isinstance(val, dict):
-                ans = val.get("analysis") or val.get("answer")
-                if ans and len(ans.strip()) > 10:
-                    natural_answers.append(f"--- {key.replace('_result','').title()} ---\n{ans}")
-        if natural_answers:
-            final_result["final_answer"] = "\n\n".join(natural_answers) + "\n\n⚠️ **Medical Disclaimer:** This AI analysis is for informational purposes. Please consult healthcare professionals for medical decisions."
-        else:
-            # 3. LLM synthesis for all agent results (as before)
-            print(f"🔧 DEBUG: No agent-level analysis, using LLM to synthesize all agent results")
-            prompt = """You are a medical AI assistant. Synthesize a comprehensive, natural language answer for the user based on the following structured results from multiple medical analysis agents. Explain findings clearly, mention confidence, and provide clinical recommendations if possible. Always include a medical disclaimer at the end.\n\n"""
-            for key, val in agent_results.items():
-                prompt += f"--- {key.replace('_result','').title()} ---\n"
-                for k, v in val.items():
-                    if k == "visualization_base64":
-                        continue
-                    prompt += f"{k}: {v}\n"
-                prompt += "\n"
-            prompt += "\nSynthesize the above into a single, clear, professional answer for the user.\n"
-            try:
-                messages = [
-                    {"role": "system", "content": "You are a medical AI assistant."},
-                    {"role": "user", "content": prompt}
-                ]
-                answer = llm.invoke(messages).content.strip()
-                if answer and len(answer) > 10:
-                    final_result["final_answer"] = f"🏥 **Medical Analysis:**\n{answer}\n\n⚠️ **Medical Disclaimer:** This AI analysis is for informational purposes. Please consult healthcare professionals for medical decisions."
+    # ALWAYS synthesize with LLM
+    prompt = f"""You are a medical AI assistant providing analysis of an endoscopic image. The user's query is: "{state.get('query', '')}"
+
+Below are the structured results from my analysis. Synthesize these into a natural, conversational response.
+
+I've analyzed the following aspects of the image:
+"""
+    for key, val in agent_results.items():
+        task_name = key.replace('_result', '').title()
+        prompt += f"--- {task_name} Analysis ---\n"
+        # Only include relevant fields from each result
+        important_fields = ['class_name', 'confidence', 'description', 'count', 'objects', 'answer', 'analysis']
+        for k in important_fields:
+            if k in val and val[k] is not None and val[k] != "" and k != "visualization_base64":
+                # Format confidence as percentage
+                if k == 'confidence' and isinstance(val[k], (int, float)):
+                    prompt += f"{k}: {val[k]:.1%}\n"
+                # Format count more naturally
+                elif k == 'count':
+                    prompt += f"Found {val[k]} polyp(s) or abnormalities\n"
+                # Format objects in a more natural way
+                elif k == 'objects' and isinstance(val[k], list) and len(val[k]) > 0:
+                    prompt += f"Detected objects:\n"
+                    for i, obj in enumerate(val[k][:3]):  # Limit to top 3 objects
+                        conf = obj.get("confidence", 0)
+                        pos = obj.get("position_description", "unknown")
+                        prompt += f"  - {pos} with {conf:.1%} confidence\n"
                 else:
-                    final_result["final_answer"] = _generate_multi_task_answer(final_result, llm)
-            except Exception as e:
-                logger.error(f"LLM synthesis failed: {str(e)}")
-                final_result["final_answer"] = _generate_multi_task_answer(final_result, llm)
+                    prompt += f"{k}: {val[k]}\n"
+        prompt += "\n"
+    
+    prompt += """
+Please create a natural, conversational response that:
+1. Addresses the user directly without mentioning "agents" or "tools"
+2. Presents findings in simple medical terms a patient would understand
+3. Provides a cohesive narrative that integrates all the analysis components
+4. Avoids technical jargon about confidence scores or agent names
+5. Makes recommendations based on the findings if appropriate
+6. Sounds like a unified AI assistant rather than a collection of separate analyses
+
+Response should be in Vietnamese or English matching the user's query language.
+"""
+    
+    # Initialize empty answer string
+    final_answer_text = ""
+    
+    try:
+        messages = [
+            {"role": "system", "content": "You are a helpful, conversational medical AI assistant. You communicate clearly and naturally, as a unified AI system that provides cohesive medical analysis. You avoid technical jargon about confidence scores or agents and present findings in simple terms a patient would understand."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        # Stream the answer from the LLM
+        print(f"🔧 DEBUG: Starting LLM streaming")
+        
+        # Create generator config for streaming
+        streaming_llm = llm.with_config({"streaming": True})
+        
+        # Process streaming chunks
+        full_response = ""
+        for chunk in streaming_llm.stream(messages):
+            chunk_text = chunk.content
+            full_response += chunk_text
+            
+            # Display incremental updates
+            print(f"🔧 DEBUG: LLM chunk: {chunk_text}")
+            
+        # Use the complete streamed response
+        answer = full_response.strip()
+        print(f"🔧 DEBUG: Final LLM answer: {answer[:100]}...")
+        
+        if answer and len(answer) > 10:
+            # Remove the heading for a more natural conversational flow
+            final_result["final_answer"] = answer
+            # Also store the raw response for streaming access
+            final_result["final_answer_raw"] = answer
+            final_result["streaming_enabled"] = True
+        else:
+            final_result["final_answer"] = _generate_multi_task_answer(final_result, llm)
+            final_result["streaming_enabled"] = False
+    except Exception as e:
+        logger.error(f"LLM synthesis failed: {str(e)}")
+        final_result["final_answer"] = _generate_multi_task_answer(final_result, llm)
+        final_result["streaming_enabled"] = False
+        
     print(f"🔧 DEBUG: Final answer: {final_result.get('final_answer', '')[:200]}...")
-    logger.info("Synthesis complete with enhanced logic")
+    logger.info("Synthesis complete with streaming capability")
     return {**state, "final_result": final_result}
 
 def _generate_multi_task_answer(result: Dict[str, Any], llm: ChatOpenAI) -> str:
-    """Generate answer highlighting multi-task execution."""
+    """Generate a natural, conversational fallback answer."""
     agent_results = result["agent_results"]
-    multi_task_info = result["multi_task_analysis"]
-    required_tasks = multi_task_info["required_tasks"]
+    query = result.get("query", "")
     
-    # Build task-specific sections
-    answer_sections = []
+    # Gather information from different results
+    findings = []
     
-    # Detection section
+    # Detection information
     if "detector_result" in agent_results:
         det = agent_results["detector_result"]
         if det.get("success"):
             count = det.get("count", 0)
             if count > 0:
-                answer_sections.append(f"🔍 **Polyp Detection:** Found {count} polyp(s) in the image")
-                # Add confidence details
                 objects = det.get("objects", [])
                 if objects:
-                    for i, obj in enumerate(objects[:2]):
-                        conf = obj.get("confidence", 0)
-                        pos = obj.get("position_description", "unknown")
-                        answer_sections.append(f"   - Polyp {i+1}: {conf:.1%} confidence, {pos}")
+                    # Just gather information, don't format yet
+                    for obj in objects[:3]:  # Limit to top 3
+                        findings.append({
+                            "type": "polyp",
+                            "confidence": obj.get("confidence", 0),
+                            "position": obj.get("position_description", "")
+                        })
             else:
-                answer_sections.append("🔍 **Polyp Detection:** No polyps detected")
+                findings.append({"type": "no_polyps"})
     
-    # Modality section
+    # Modality information
     if "modality_result" in agent_results:
         mod = agent_results["modality_result"]
         if mod.get("success"):
             modality = mod.get("class_name", "Unknown")
-            confidence = mod.get("confidence", 0)
-            answer_sections.append(f"📸 **Imaging Modality:** {modality} ({confidence:.1%} confidence)")
+            if modality != "Unknown":
+                findings.append({
+                    "type": "modality",
+                    "name": modality,
+                    "description": mod.get("description", "")
+                })
     
-    # Region section
+    # Region information
     if "region_result" in agent_results:
         reg = agent_results["region_result"]
         if reg.get("success"):
             region = reg.get("class_name", "Unknown")
-            confidence = reg.get("confidence", 0)
-            answer_sections.append(f"📍 **Anatomical Region:** {region} ({confidence:.1%} confidence)")
+            if region != "Unknown":
+                findings.append({
+                    "type": "region",
+                    "name": region,
+                    "description": reg.get("description", "")
+                })
     
-    # Medical QA section
+    # VQA information (direct answers)
+    vqa_answer = ""
     if "vqa_result" in agent_results:
         vqa = agent_results["vqa_result"]
         if vqa.get("success"):
             vqa_answer = vqa.get("answer", "")
-            if vqa_answer:
-                answer_sections.append(f"🏥 **Medical Analysis:**\n{vqa_answer}")
     
-    # Multi-task summary
-    completed_count = len(multi_task_info["completed_tasks"])
-    required_count = len(required_tasks)
-    completion_rate = multi_task_info["task_completion_rate"]
+    # Now create a natural language response
     
-    if len(answer_sections) > 1:
-        answer_sections.append(f"\n📊 **Multi-Task Summary:** Completed {completed_count}/{required_count} tasks ({completion_rate:.1%})")
-        answer_sections.append(f"**Tasks executed:** {', '.join(multi_task_info['completed_tasks'])}")
+    # If we have a VQA answer, use it as the primary response
+    if vqa_answer:
+        return vqa_answer
     
-    # Medical disclaimer
-    answer_sections.append("\n⚠️ **Medical Disclaimer:** This AI analysis is for informational purposes. Please consult healthcare professionals for medical decisions.")
+    # Otherwise, create a response from findings
+    response_parts = []
     
-    return "\n".join(answer_sections)
+    # Handle polyp findings
+    polyp_findings = [f for f in findings if f.get("type") == "polyp"]
+    if polyp_findings:
+        if len(polyp_findings) == 1:
+            p = polyp_findings[0]
+            response_parts.append(f"Tôi đã phát hiện một polyp ở vị trí {p['position']}.")
+        else:
+            response_parts.append(f"Tôi đã phát hiện {len(polyp_findings)} polyp trong hình ảnh.")
+            for i, p in enumerate(polyp_findings[:2], 1):
+                response_parts.append(f"- Polyp {i} ở vị trí {p['position']}")
+    elif any(f.get("type") == "no_polyps" for f in findings):
+        response_parts.append("Tôi không phát hiện polyp nào trong hình ảnh này.")
+    
+    # Handle modality and region in one sentence if available
+    modality = next((f for f in findings if f.get("type") == "modality"), None)
+    region = next((f for f in findings if f.get("type") == "region"), None)
+    
+    if modality and region:
+        response_parts.append(f"Đây là hình ảnh nội soi loại {modality['name']} của vùng {region['name']}.")
+    elif modality:
+        response_parts.append(f"Đây là hình ảnh nội soi loại {modality['name']}.")
+    elif region:
+        response_parts.append(f"Hình ảnh cho thấy vùng {region['name']}.")
+    
+    # If we have no findings to report, provide a generic response
+    if not response_parts:
+        response_parts.append("Tôi đã phân tích hình ảnh nội soi của bạn nhưng không thể đưa ra kết luận cụ thể. Vui lòng thử lại với hình ảnh rõ ràng hơn hoặc cung cấp thêm thông tin.")
+    
+    # If this is a response to a specific query, add that context
+    if query:
+        response_parts.append(f"Về câu hỏi của bạn: '{query}', tôi chưa thể đưa ra câu trả lời cụ thể. Vui lòng cung cấp thêm thông tin hoặc đặt câu hỏi rõ ràng hơn.")
+    
+    return " ".join(response_parts)

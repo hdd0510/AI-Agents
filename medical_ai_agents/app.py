@@ -155,6 +155,79 @@ def create_enhanced_chatbot():
             from medical_ai_agents import MedicalAISystem
             return MedicalAISystem(medical_config)
         
+        def _save_image_to_temp(self, image) -> str:
+            """Save uploaded image to temporary file."""
+            import os
+            import tempfile
+            import time
+            
+            # Create temp dir if doesn't exist
+            temp_dir = os.path.join(os.path.dirname(__file__), '..', 'temp')
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            # Generate temp file path with timestamp
+            timestamp = int(time.time())
+            temp_path = os.path.join(temp_dir, f"upload_{timestamp}.jpg")
+            
+            # Save image
+            try:
+                if hasattr(image, 'save'):
+                    # Pillow Image object
+                    image.save(temp_path)
+                elif isinstance(image, str) and (image.startswith('data:image') or os.path.isfile(image)):
+                    # Data URL or file path
+                    if image.startswith('data:image'):
+                        import base64
+                        # Extract base64 data
+                        header, encoded = image.split(",", 1)
+                        data = base64.b64decode(encoded)
+                        with open(temp_path, "wb") as f:
+                            f.write(data)
+                    else:
+                        # Copy existing file
+                        import shutil
+                        shutil.copy(image, temp_path)
+                else:
+                    # Unknown format
+                    with open(temp_path, "wb") as f:
+                        f.write(image)
+                
+                return temp_path
+            except Exception as e:
+                logger.error(f"Error saving image: {str(e)}")
+                # Fallback to a tempfile
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
+                    tmp.write(image if isinstance(image, bytes) else str(image).encode('utf-8'))
+                    return tmp.name
+        
+        def _save_visualization(self, base64_data: str, filename: str) -> str:
+            """Save visualization image from base64 data."""
+            import os
+            import base64
+            
+            # Create visualizations dir if doesn't exist
+            viz_dir = os.path.join(os.path.dirname(__file__), '..', 'visualizations')
+            os.makedirs(viz_dir, exist_ok=True)
+            
+            # Save image
+            viz_path = os.path.join(viz_dir, filename)
+            try:
+                if base64_data.startswith('data:image'):
+                    # Extract base64 data
+                    header, encoded = base64_data.split(",", 1)
+                    data = base64.b64decode(encoded)
+                else:
+                    # Assume it's already base64 encoded
+                    data = base64.b64decode(base64_data)
+                    
+                with open(viz_path, "wb") as f:
+                    f.write(data)
+                    
+                return viz_path
+            except Exception as e:
+                logger.error(f"Error saving visualization: {str(e)}")
+                return ""
+        
         def process_message_streaming(self, message, image, history, username, session_state):
             """SIMPLIFIED streaming version - cleaned up logic."""
             import uuid
@@ -178,41 +251,112 @@ def create_enhanced_chatbot():
                 has_image = image is not None
                 
                 if has_image:
-                    result = self.medical_ai.analyze(image_path=image, query=message)
+                    # =============  IMAGE WORKFLOW (SIMPLIFIED) =============
+                    logger.info(f"Processing image with query: '{message[:50]}...'")
+                    
+                    # Save image to temp file
+                    image_path = self._save_image_to_temp(image)
+                    
+                    # Update status during processing
+                    history[-1][1] = "🔍 Đang phân tích hình ảnh..."
+                    yield "", history, session_state
+                    time.sleep(0.3)
+                    
+                    # Call medical AI system
+                    result = self.medical_ai.analyze(
+                        image_path=image_path,
+                        query=message,
+                        medical_context={
+                            "user_context": context
+                        } if context else None
+                    )
+                    
+                    logger.debug(f"Image analysis result: success={result.get('success', False)}")
                     
                     if result.get("success", False):
-                        response_parts = [f"🔍 **Analysis Results:**\n{result.get('final_answer', '')}"]
-                        
-                        # FIXED: Check for visualization in agent_results
-                        if "agent_results" in result and "detector_result" in result["agent_results"]:
-                            detector = result["agent_results"]["detector_result"]
-                            
-                            if detector.get("visualization_available") and detector.get("visualization_base64"):
-                                # Create proper HTML img tag
-                                img_b64 = detector["visualization_base64"]
-                                img_html = f'''
-        <div style="margin: 10px 0; text-align: center;">
-            <p><strong>🎯 Visualization Result:</strong></p>
-            <img src="data:image/png;base64,{img_b64}" 
-                alt="Polyp Detection Results" 
-                style="max-width: 100%; height: auto; border-radius: 8px; 
-                        box-shadow: 0 2px 8px rgba(0,0,0,0.1); border: 1px solid #ddd;">
-        </div>'''
-                                response_parts.append(img_html)
-                                
-                                # Also save to session state for separate display
-                                session_state["last_visualization"] = img_b64
-                        
-                        final_response = "\n\n".join(response_parts)
-                        history[-1][1] = final_response
+                        # Update status again
+                        history[-1][1] = "🔍 Đang tạo phân tích chi tiết..."
                         yield "", history, session_state
+                        time.sleep(0.4)
+
+                        # Check if visualization is available
+                        if "final_result" in result and "agent_results" in result["final_result"]:
+                            agent_results = result["final_result"]["agent_results"]
+                            if "detector_result" in agent_results and agent_results["detector_result"].get("visualization_base64"):
+                                # Save visualization for later viewing
+                                viz_data = agent_results["detector_result"]["visualization_base64"]
+                                viz_path = self._save_visualization(viz_data, f"viz_{session_id}.jpg")
+                                session_state["viz_image_path"] = viz_path
+                                session_state["last_result_image_data"] = viz_data
+                        
+                        # Generate streaming response for image mode - start with a header
+                        streaming_text = "🔬 **Medical Image Analysis**\n\n"
+                        
+                        if "final_answer" in result:
+                            final_answer = result["final_answer"]
+                            
+                            # Add context if available
+                            if context:
+                                streaming_text += "💭 **Previously recorded information:**\n"
+                                streaming_text += (context[:200] + "..." if len(context) > 200 else context) + "\n\n"
+                            
+                            # Check if streaming is natively available
+                            if "final_answer_raw" in result and result.get("streaming_enabled", False):
+                                # Use advanced streaming - more granular word-by-word streaming for smoother experience
+                                raw_answer = result["final_answer_raw"]
+                                words = raw_answer.split()
+                                streaming_text += "📋 **Analysis results:** \n\n"
                                 
+                                for i, word in enumerate(words):
+                                    streaming_text += word + " "
+                                    if i % 2 == 0:  # Update every 2 words for smoother streaming
+                                        history[-1][1] = streaming_text
+                                        yield "", history, session_state
+                                        time.sleep(0.03)  # Faster timing for smoother experience
+                            else:
+                                # Fallback to manual sentence-by-sentence streaming
+                                sentences = final_answer.replace("🏥 **Medical Analysis:**", "").split(". ")
+                                streaming_text += "📋 **Analysis results:** \n\n"
+                                
+                                for i, sentence in enumerate(sentences):
+                                    if i < len(sentences) - 1:
+                                        streaming_text += sentence + ". "
+                                    else:
+                                        streaming_text += sentence
+                                    
+                                    history[-1][1] = streaming_text
+                                    yield "", history, session_state
+                                    time.sleep(0.1)
+                            
+                            # Add final details with poly count and tools used
+                            if "final_result" in result and "agent_results" in result["final_result"] and "detector_result" in result["final_result"]["agent_results"]:
+                                detector = result["final_result"]["agent_results"]["detector_result"]
+                                polyp_count = detector.get("count", 0)
+                                if polyp_count > 0:
+                                    streaming_text += f"\n\n🔍 **Detected {polyp_count} suspicious area{'s' if polyp_count > 1 else ''}**"
+                                    streaming_text += "\n💡 A medical professional should review these findings"
+                                    if "viz_image_path" in session_state:
+                                        streaming_text += "\n👁️ Click 'View Results' to see visualized analysis"
+                            
+                            # Record polyp count in state for memory
+                            polyp_count = 0
+                            if "final_result" in result and "agent_results" in result["final_result"] and "detector_result" in result["final_result"]["agent_results"]:
+                                polyp_count = result["final_result"]["agent_results"]["detector_result"].get("count", 0)
+                            session_state["polyp_count"] = polyp_count
+                            
+                            history[-1][1] = streaming_text
+                            yield "", history, session_state
+                        else:
+                            # Fallback for missing final answer
+                            fallback_response = "⚠️ Không tạo được phân tích hoàn chỉnh. Vui lòng thử lại."
+                            history[-1][1] = fallback_response
+                            yield "", history, session_state
                     else:
-                        error_response = "❌ Có lỗi trong quá trình phân tích hình ảnh.\n"
-                        error_response += f"Chi tiết lỗi: {result.get('error', 'Unknown error')}"
+                        # Handle system error
+                        logger.error(f"Medical AI system failed: {result.get('error', 'Unknown error')}")
+                        error_response = f"❌ Xin lỗi, không thể phân tích hình ảnh: {result.get('error', 'Unknown error')}"
                         history[-1][1] = error_response
                         yield "", history, session_state
-                
                 else:
                     # =============  TEXT-ONLY WORKFLOW (SIMPLIFIED) =============
                     logger.info(f"Processing text-only query: '{message[:50]}...'")
@@ -241,8 +385,8 @@ def create_enhanced_chatbot():
                         
                         # Check if VQA result is successful
                         vqa_success = True
-                        if "agent_results" in result and "vqa_result" in result["agent_results"]:
-                            vqa_result = result["agent_results"]["vqa_result"]
+                        if "final_result" in result and "agent_results" in result["final_result"] and "vqa_result" in result["final_result"]["agent_results"]:
+                            vqa_result = result["final_result"]["agent_results"]["vqa_result"]
                             vqa_success = vqa_result.get("success", False)
                             
                             if not vqa_success:
@@ -259,7 +403,6 @@ def create_enhanced_chatbot():
                         
                         # VQA succeeded - process response
                         if vqa_success and "final_answer" in result:
-                            final_answer = result["final_answer"]
                             streaming_text = "🧠 **Tư vấn y tế qua LLaVA:**\n\n"
                             
                             # Add context if available
@@ -267,24 +410,34 @@ def create_enhanced_chatbot():
                                 streaming_text += "💭 **Dựa trên thông tin trước đó:**\n"
                                 streaming_text += (context[:200] + "..." if len(context) > 200 else context) + "\n\n"
                             
-                            # Stream the LLaVA medical consultation
-                            words = final_answer.split()
-                            for i, word in enumerate(words):
-                                streaming_text += word + " "
-                                if i % 3 == 0:  # Update every 3 words for smoother streaming
-                                    history[-1][1] = streaming_text
-                                    yield "", history, session_state
-                                    time.sleep(0.05)
+                            # Check if streaming is natively available
+                            has_streaming = False
+                            if "final_result" in result and "final_answer_raw" in result["final_result"] and result["final_result"].get("streaming_enabled", False):
+                                has_streaming = True
+                                # Use advanced character-by-character streaming for text consultations
+                                raw_answer = result["final_result"]["final_answer_raw"]
+                                words = raw_answer.split()
+                                for i, word in enumerate(words):
+                                    streaming_text += word + " "
+                                    if i % 1 == 0:  # Update every word for smoother streaming
+                                        history[-1][1] = streaming_text
+                                        yield "", history, session_state
+                                        time.sleep(0.02)  # Very fast timing for natural typing effect
+                            
+                            if not has_streaming:
+                                # Fallback to traditional word-by-word streaming
+                                final_answer = result["final_answer"]
+                                words = final_answer.replace("🏥 **Medical Analysis:**", "").split()
+                                for i, word in enumerate(words):
+                                    streaming_text += word + " "
+                                    if i % 3 == 0:  # Update every 3 words for smoother streaming
+                                        history[-1][1] = streaming_text
+                                        yield "", history, session_state
+                                        time.sleep(0.05)
                             
                             # Add LLaVA processing info
                             streaming_text += f"\n\n🔬 **Được xử lý bởi:** LLaVA-Med (Text-Only Mode)"
                             streaming_text += f"\n📊 **Loại tư vấn:** Medical consultation without image"
-                            
-                            # Add medical disclaimer
-                            streaming_text += f"\n\n⚠️ **Lưu ý quan trọng:**"
-                            streaming_text += f"\n- Đây là tư vấn sơ bộ từ AI, không thay thế khám trực tiếp"
-                            streaming_text += f"\n- Hãy tham khảo ý kiến bác sĩ chuyên khoa để có chẩn đoán chính xác"
-                            streaming_text += f"\n- Nếu có triệu chứng nghiêm trọng, hãy đến cơ sở y tế ngay lập tức"
                             
                             history[-1][1] = streaming_text.strip()
                             yield "", history, session_state
@@ -304,12 +457,20 @@ def create_enhanced_chatbot():
                 
                 # Save to memory
                 final_response = history[-1][1]
+                
+                # Safely extract polyp count if available
+                polyp_count = 0
+                if 'result' in locals() and "final_result" in result and "agent_results" in result["final_result"]:
+                    agent_results = result["final_result"]["agent_results"]
+                    if "detector_result" in agent_results:
+                        polyp_count = agent_results["detector_result"].get("count", 0)
+                
                 interaction = {
                     "query": message,
                     "response": final_response,
                     "has_image": has_image,
                     "analysis": result if 'result' in locals() else None,
-                    "polyp_count": result.get("polyp_count", 0) if 'result' in locals() else 0,
+                    "polyp_count": polyp_count,
                     "is_text_only": not has_image
                 }
                 
@@ -342,7 +503,6 @@ def create_enhanced_chatbot():
                             fallback_response = f"💭 **Dựa trên thông tin trước đó:**\n{context[:200]}...\n\n" + fallback_response
                         
                         fallback_response += f"\n\n🔬 **Được xử lý bởi:** LLaVA-Med (Text-Only Mode)"
-                        fallback_response += f"\n\n⚠️ **Lưu ý:** Đây là tư vấn AI, hãy tham khảo bác sĩ chuyên khoa."
                         return fallback_response
             
             # Generic helpful response

@@ -38,6 +38,15 @@ class ClassifierTool(BaseTool):
             self.logger.info(f"Loading {self.classifier_type} classifier from {self.model_path}")
             self.model = YOLO(self.model_path)
             self.model.to(self.device)
+            
+            # Adjust class names order for modality classifier
+            if self.classifier_type == "modality":
+                # Reorder class names to match actual model output
+                # Original order: ["WLI", "BLI", "FICE", "LCI"]
+                # Correct order based on model output: ["BLI", "FICE", "LCI", "WLI"]
+                correct_order = ["BLI", "FICE", "LCI", "WLI"]
+                self.class_names = [name for name in correct_order if name in self.class_names]
+            
             return True
         except Exception as e:
             self.logger.error(f"Failed to load classifier model: {str(e)}")

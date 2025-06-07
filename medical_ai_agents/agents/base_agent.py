@@ -130,10 +130,15 @@ class BaseAgent(ABC):
         return msgs
 
     def _run_react_loop(self, task_input: Dict[str, Any]) -> Dict[str, Any]:
+        """Run ReAct loop for guided adaptive classification."""
         self.react_history = []
         for i in range(1, self.max_iterations + 1):
             resp = self.llm.invoke(self._create_react_messages(task_input)).content
+            print(f"🔧 DEBUG: resp {i} {resp}")
             t, a, inp = self._parse_llm_response(resp)
+            print(f"🔧 DEBUG: t {i} {t}")
+            print(f"🔧 DEBUG: a {i} {a}")
+            print(f"🔧 DEBUG: inp {i} {inp}")
             if not t or not a:
                 continue
             step = ReActStep(thought=t, thought_type=ThoughtType.INITIAL if i == 1 else ThoughtType.REASONING, action=a, action_input=inp)
@@ -147,6 +152,11 @@ class BaseAgent(ABC):
             step.thought_type = ThoughtType.OBSERVATION
             self.react_history.append(step)
             task_input[f"obs_{i}"] = obs
+            print(f"🔧 DEBUG: ReAct iteration {i}")
+            print(f"🔧 DEBUG: Thought: {t}")
+            print(f"🔧 DEBUG: Action: {a}")
+            print(f"🔧 DEBUG: Action Input: {inp}")
+            print(f"🔧 DEBUG: Observation: {obs}")
         return {"success": False, "error": "Max iterations reached", "history": self._serialize_history()}
 
     def _serialize_history(self) -> List[Dict[str, Any]]:
@@ -161,7 +171,7 @@ class BaseAgent(ABC):
             task_input = self._extract_task_input(state)
             result = self._run_react_loop(task_input)
             agent_out = self._format_agent_result(result)
-            print(agent_out)
+            print(f"🔧 DEBUG: Agent {self.name} result: {agent_out}")
             return {**state, **agent_out}
         except Exception as e:
             err = f"Error in {self.name}: {e}\n{traceback.format_exc()}"

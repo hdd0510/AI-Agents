@@ -44,7 +44,8 @@ class VQAAgent(BaseAgent):
 
     def _get_system_prompt(self) -> str:
         """Clear system prompt với correct format."""
-        return f"""You are a medical consultation AI. Use tools to provide accurate medical advice.
+        return f"""You are a medical consultation AI with expert knowledge in medical imaging and pathology. You have ability of 
+        reasoning and handle questions, so just use tools to provide more accurate medical advice to your answer
 
 RESPONSE FORMAT (REQUIRED):
 Thought: [your reasoning]
@@ -292,25 +293,7 @@ Always use the exact format above. Start with "Thought:"."""
             else:
                 results_text += f"   Error: {tool_data.get('error', 'Unknown error')}\n"
         
-        return f"""**MEDICAL CONSULTATION SYNTHESIS**
-
-Original Query: "{query}"
-Has Image: {has_image}
-
-Tool Execution Results:
-{results_text}
-
-**YOUR TASK:**
-Analyze the tool results above and provide a comprehensive final medical consultation response.
-
-**Requirements:**
-1. Synthesize information from all successful tool executions
-2. Provide clear, professional medical advice
-3. Include appropriate medical disclaimers
-4. Recommend next steps or follow-up if needed
-5. Be concise but thorough
-
-**Format your response as a complete medical consultation answer.**"""
+        return f"""**MEDICAL CONSULTATION SYNTHESIS**\n\nOriginal Query: \"{query}\"\nHas Image: {has_image}\n\nTool Execution Results:\n{results_text}\n\n**YOUR TASK:**\nAnalyze the tool results above and provide a comprehensive final medical consultation response.\n\n**Requirements:**\n1. Synthesize information from all successful tool executions\n2. Provide clear, professional medical advice\n4. Recommend next steps or follow-up if needed\n5. Be concise but thorough\n\n**Format your response as a complete medical consultation answer.**"""
 
     def _format_agent_result(self, react_result: Dict[str, Any]) -> Dict[str, Any]:
         """Format agent result."""
