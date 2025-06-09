@@ -126,18 +126,37 @@ class LLaVATool(BaseTool):
             from llava.conversation import conv_templates, SeparatorStyle
             from llava.mm_utils import process_images, tokenizer_image_token
             
+            # Enhanced image path validation and debugging
+            self.logger.info(f"LLaVA tool called with query: '{query[:50]}...' and image_path: {image_path}")
+            
             # Check both the explicit text_only flag and image path
             is_text_only = medical_context is not None and medical_context.get("is_text_only", False)
-            has_image = image_path is not None and os.path.exists(image_path) and not is_text_only
+            
+            # More detailed verification of image path
+            if image_path:
+                # Check if image file exists
+                if os.path.exists(image_path):
+                    file_size = os.path.getsize(image_path)
+                    self.logger.info(f"Image file exists. Size: {file_size} bytes")
+                    has_image = not is_text_only  # Use image if not explicitly text-only
+                else:
+                    self.logger.warning(f"Image path provided but file does not exist: {image_path}")
+                    has_image = False
+            else:
+                self.logger.info("No image path provided")
+                has_image = False
+            
+            # Log final decision on image usage
+            self.logger.info(f"Processing query as {'image+text' if has_image else 'text-only'}")
             
             if has_image:
                 # Load real image
                 image = self._load_image(image_path)
-                self.logger.info(f"Processing with real image: {image_path}")
+                self.logger.info(f"Image loaded successfully. Size: {image.size}")
             else:
                 # Create placeholder for text-only
                 image = self._create_placeholder_image()
-                self.logger.info("Processing text-only query with placeholder image")
+                self.logger.info("Using placeholder image for text-only query")
             
             image_size = image.size
             

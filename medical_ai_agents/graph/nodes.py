@@ -129,6 +129,29 @@ def task_analyzer(state: SystemState, llm: ChatOpenAI) -> Dict:
     
     logger.info(f"Analyzing multi-task query: {query}")
     
+    # Initialize context variable outside of the text-only branch
+    context = ""
+    
+    # Extract context from conversation history if available
+    conversation_history = state.get("conversation_history", [])
+    if conversation_history:
+        # Filter out system messages and pending entries 
+        filtered_entries = [
+            entry for entry in conversation_history 
+            if not entry.get("is_system", False) and 
+            not entry.get("is_pending", False) and
+            not entry.get("is_meta", False)
+        ]
+        
+        # Get the last 2 conversations for context
+        recent_conversations = filtered_entries[-2:] if filtered_entries else []
+        
+        if recent_conversations:
+            context = "Previous conversation:\n"
+            for i, conv in enumerate(recent_conversations):
+                context += f"User: {conv.get('query', '')}\n"
+                context += f"System: {conv.get('response', '')[:100]}...\n\n"
+    
     # prompt for multi-task analysis with conversation history
     prompt = PromptTemplate.from_template(
         """Analyze the following request and determine the necessary tasks to provide a complete answer:
@@ -332,19 +355,27 @@ def _mark_task_completed(state: SystemState, completed_task: str) -> SystemState
 
 # Result Synthesizer
 def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
-    """Tổng hợp kết quả từ nhiều agent thành phản hồi cuối cùng."""
+    """Synthesize results from multiple tasks and agents."""
     logger = logging.getLogger("graph.nodes.result_synthesizer")
     
-    # --- DETAILED DEBUG LOGGING START ---
-    logger.info("=" * 50)
-    logger.info("SYNTHESIZER NODE INPUT DETAILS")
-    logger.info("=" * 50)
+    # Extract conversation history for debugging
+    conversation_history = state.get("conversation_history", [])
     
-    # Query info
+    logger.info(f"Synthesizer received conversation history: {len(conversation_history)} entries")
+    if conversation_history:
+        logger.info(f"First history entry: {conversation_history[0].get('query', 'Unknown')[:30]}...")
+        logger.info(f"Last history entry: {conversation_history[-1].get('query', 'Unknown')[:30]}...")
+        
+        # Log each entry for detailed debugging
+        for i, entry in enumerate(conversation_history[-2:]):  # Show last 2 entries
+            logger.info(f"History entry {i}: query='{entry.get('query', 'None')[:30]}...', "
+                         f"is_system={entry.get('is_system', False)}, "
+                         f"is_pending={entry.get('is_pending', False)}")
+    
+    # Extract state parameters
     current_query = state.get("query", "")
-    logger.info(f"QUERY: '{current_query}'")
-    logger.info(f"IS_TEXT_ONLY: {state.get('is_text_only', False)}")
-    logger.info(f"TASK TYPE: {state.get('task_type', 'unknown')}")
+    is_text_only = state.get("is_text_only", False)
+    task_type = state.get("task_type", "unknown")
     
     # Task info
     required_tasks = state.get("required_tasks", [])
@@ -353,9 +384,6 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
     logger.info(f"REQUIRED TASKS: {required_tasks}")
     logger.info(f"COMPLETED TASKS: {completed_tasks}")
     logger.info(f"EXECUTION ORDER: {execution_order}")
-    
-    # Conversation history info
-    conversation_history = state.get("conversation_history", [])
     
     # Clean up pending/debug entries from conversation history
     if conversation_history:
@@ -366,7 +394,7 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
     
     logger.info(f"CONVERSATION HISTORY ENTRIES: {len(conversation_history)}")
     if conversation_history:
-        for i, entry in enumerate(conversation_history[-3:]):  # Show last 3 entries
+        for i, entry in enumerate(conversation_history[-10:]):  # Show last 10 entries thay vì 3
             logger.info(f"HISTORY ENTRY {i}:")
             logger.info(f"  - QUERY: {entry.get('query', 'None')[:50]}...")
             resp = entry.get('response', 'None')
@@ -391,15 +419,10 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
     
     logger.info(f"AVAILABLE AGENT RESULTS: {agent_results_keys}")
     logger.info("=" * 50)
-    # --- DETAILED DEBUG LOGGING END ---
     
     # Calculate processing time
     start_time = state.get("start_time", time.time())
     processing_time = time.time() - start_time
-    
-    # Get conversation history
-    conversation_history = state.get("conversation_history", [])
-    current_query = state.get("query", "")
     
     # Debug information about conversation history
     logger.info(f"Synthesizer received conversation history: {len(conversation_history)} entries")
@@ -410,7 +433,6 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
         # Add detailed logging of conversation pairs
         logger.info("=" * 50)
         logger.info("CONVERSATION HISTORY PAIRS:")
-        print(conversation_history)
         for i, entry in enumerate(conversation_history):
             is_system = entry.get("is_system", False)
             entry_type = "SYSTEM" if is_system else "USER"
@@ -497,8 +519,8 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
                 not entry.get("is_pending", False)
             ]
             
-            # Get the last 3 relevant interactions
-            recent_conversations = filtered_entries[-3:] if filtered_entries else []
+            # Get the last 10 relevant interactions thay vì 3
+            recent_conversations = filtered_entries[-10:] if filtered_entries else []
             
             if recent_conversations:
                 conversation_context = "Previous conversation:\n"
@@ -650,8 +672,8 @@ Respond to this question directly and conversationally. Even though this isn't a
             if not entry.get("is_system", False) and not entry.get("is_meta", False) and not entry.get("is_pending", False)
         ]
         
-        # Get the last 3 interactions at most
-        recent_conversations = relevant_entries[-3:] if relevant_entries else []
+        # Get the last 10 interactions at most thay vì 3
+        recent_conversations = relevant_entries[-10:] if relevant_entries else []
         
         if recent_conversations:
             conversation_context = "Previous conversation context:\n"
@@ -690,23 +712,26 @@ Your task:
 5. Always identify yourself as a Medical AI Assistant
 6. Respond in English, maintaining medical accuracy"""
     else:
-        prompt_template = """You are a Medical AI Assistant specializing in healthcare and medical consultation. Your purpose is to provide comprehensive medical analysis based on multiple data sources including {tasks}.
-        
+        prompt_template = """You are a Medical AI Assistant specializing in healthcare and medical consultation. Your purpose is to provide comprehensive medical analysis.
+
 {conversation_context}
 
 The user asked: "{query}"
 
-Combined analysis results:
+I have analyzed the available medical information:
 {combined_results}
 
-Your task:
-1. Consider the previous conversation context if relevant
-2. Synthesize these results into a comprehensive, cohesive medical response
-3. Directly address the user's query with relevant medical findings
-4. Format your response in a clear, professional manner suitable for medical consultation
-5. IMPORTANT: If any classifications show LOW CONFIDENCE, clearly mention this uncertainty and explain your analysis
-6. Always identify yourself as a Medical AI Assistant
-7. Respond in English, maintaining medical accuracy"""
+IMPORTANT INSTRUCTIONS:
+1. Respond as a UNIFIED MEDICAL ASSISTANT, not as a collection of tools or agents
+2. DO NOT mention separate tools, agents or model names (like LLaVA, modality detector, etc.)
+3. DO NOT use phrases like "Based on the analysis" or "According to the medical AI system"
+4. DO NOT list or itemize different analyses - integrate everything into a cohesive, natural response
+5. Speak directly as a knowledgeable medical assistant (use "I" not "the system")
+6. If the analysis contains uncertainties, incorporate them naturally without mentioning confidence scores
+7. Maintain a professional, confident, and conversational medical tone
+
+Your response must read like it comes from a single, unified medical assistant with deep expertise in gastroenterology and medical image analysis.
+"""
     
     # Format the prompt arguments
     prompt_args = {

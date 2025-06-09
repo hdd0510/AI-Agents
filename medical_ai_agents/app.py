@@ -22,6 +22,7 @@ import json
 import time
 import logging
 from pathlib import Path
+import re
 os.environ['GRADIO_TEMP_DIR'] = '/tmp'
 
 # Setup logging
@@ -229,35 +230,50 @@ def create_enhanced_chatbot():
                 return ""
         
         def process_message_streaming(self, message, image, history, username, session_state):
-            """SIMPLIFIED streaming version - cleaned up logic."""
+            """FIXED streaming version - properly preserve query in conversation history."""
             import uuid
             
-            # Generate session and user IDs first thing
+            # 1. CRITICAL FIX: Store original message early 
+            original_message = message.strip() if message else ""
+            if not original_message:
+                return "", history, session_state
+            
+            logger.info(f"[DEBUG] Processing message: '{original_message[:50]}...'")
+            
+            # Generate session and user IDs
             session_id = session_state.get("session_id")
+            # Log the session state to debug
+            logger.info(f"[SESSION] Current session state keys: {list(session_state.keys())}")
+            logger.info(f"[SESSION] Current session_id from state: {session_id}")
+            
             if not session_id:
                 session_id = str(uuid.uuid4())
                 session_state["session_id"] = session_id
                 logger.info(f"Created new session ID: {session_id}")
             else:
-                logger.info(f"Using existing session ID: {session_id}")
-                
+                logger.info(f"Reusing existing session ID: {session_id}")
+            
             user_id = self.generate_user_id(username)
             session_state["user_id"] = user_id
             
-            # Start with user message
-            history.append([message, "🤔 Analyzing..."])
-            yield "", history, session_state
+            # Start with user message - FIXED: preserve original message
+            history.append([original_message, "🤔 Analyzing..."])  # Use original_message
+            yield "", history, session_state  # Return empty string to clear input
             
             try:
                 # Get contextual information
                 context = self.memory.get_contextual_prompt(session_id, user_id)
                 
-                # SIMPLIFIED: Determine processing mode
+                # IMPORTANT: Save session_id in both global state and temporary result
+                # This ensures the session_id persists through the entire process
+                session_state["session_id"] = session_id
+                
+                # Determine processing mode
                 has_image = image is not None
                 
                 if has_image:
-                    # =============  IMAGE WORKFLOW (SIMPLIFIED) =============
-                    logger.info(f"Processing image with query: '{message[:50]}...'")
+                    # =============  IMAGE WORKFLOW =============
+                    logger.info(f"Processing image with query: '{original_message[:50]}...'")
                     
                     # Save image to temp file
                     image_path = self._save_image_to_temp(image)
@@ -267,299 +283,336 @@ def create_enhanced_chatbot():
                     yield "", history, session_state
                     time.sleep(0.3)
                     
-                    # Call medical AI system
+                    # 2. CRITICAL FIX: Pass original_message to analyze, not the cleared message
                     result = self.medical_ai.analyze(
                         image_path=image_path,
-                        query=message,
+                        query=original_message,  # <-- Use original_message here
                         medical_context={
                             "user_context": context
-                        } if context else None
+                        } if context else None,
+                        conversation_history=session_state.get("conversation_history", []),  # CRITICAL: Pass conversation history
+                        session_id=session_id  # CRITICAL: Pass session_id explicitly
                     )
                     
                     logger.debug(f"Image analysis result: success={result.get('success', False)}")
                     
                     if result.get("success", False):
-                        # Only handle polyp detection if it was done
+                        # Build response (existing code...)
+                        response_parts = []
+                        
+                        # Handle polyp detection if available
                         if "polyps" in result:
                             polyp_count = len(result.get("polyps", []))
                             
-                            # Add detection info to the response message
                             if polyp_count > 0:
-                                response_parts = []
+                                # Display entry 0 response first
+                                if "response" in result and isinstance(result["response"], list) and len(result["response"]) > 0:
+                                    response_parts.append(f"💬 **{result['response'][0]}**\n")
+                                
                                 response_parts.append("🔍 **Detection Results:**")
                                 response_parts.append(f"- Found {polyp_count} polyp(s)")
                                 
-                                # Get confidence of first polyp
                                 if result["polyps"] and "confidence" in result["polyps"][0]:
                                     confidence = result["polyps"][0]["confidence"]
                                     response_parts.append(f"- Confidence: {confidence:.1%}")
                                 
-                                # Check if visualization is available
+                                # Handle visualization (existing code...)
                                 if "detector_result" in result.get("agent_results", {}) and result["agent_results"].get("detector", {}).get("visualization_base64"):
-                                    # Save visualization to temp file
                                     viz_base64 = result["agent_results"]["detector"]["visualization_base64"]
-                                    
-                                    # Generate a unique filename for this visualization
                                     viz_filename = f"polyp_viz_{session_state.get('session_id', 'unknown')}_{int(time.time())}.png"
                                     viz_path = self._save_visualization(viz_base64, viz_filename)
                                     
-                                    # Add to session state
                                     session_state["last_visualization"] = viz_path
                                     session_state["has_visualization"] = True
                                     
-                                    # Display directly in message using HTML
-                                    # Create data URL
                                     img_data_url = f"data:image/png;base64,{viz_base64}"
                                     response_parts.append("\n\n📊 **Polyp Detection Results:**")
                                     response_parts.append(f'<img src="{img_data_url}" alt="Polyp Detection Results" style="max-width: 100%; height: auto; border-radius: 8px; margin: 10px 0;">')
                             else:
+                                # Display entry 0 response first for no polyp case
+                                if "response" in result and isinstance(result["response"], list) and len(result["response"]) > 0:
+                                    response_parts.append(f"💬 **{result['response'][0]}**\n")
                                 response_parts.append("🔍 **No polyps detected in this image.**")
-                                response_parts.append("Regular screening is still recommended as a preventive measure.")
                         
-                        # If final answer is available, add it
+                        # Add final answer if available
                         if "final_answer" in result:
-                            # Add detection results first if available
-                            if "medical_context" in result:
-                                context_parts = []
-                                mc = result["medical_context"]
-                                
-                                if "imaging_type" in mc:
-                                    context_parts.append(f"- Imaging technique: {mc['imaging_type']}")
-                                
-                                if "anatomical_region" in mc:
-                                    context_parts.append(f"- Anatomical region: {mc['anatomical_region']}")
-                                
-                                if context_parts:
-                                    response_parts.append("\n💭 **Image Analysis:**")
-                                    response_parts.extend(context_parts)
-                            
-                            # Add LLM answer
                             response_parts.append("\n💬 **Medical AI Assessment:**")
                             response_parts.append(result["final_answer"])
                         
-                        # Add medical recommendations
-                        if "polyps" in result and len(result.get("polyps", [])) > 0:
-                            response_parts.append("\n💡 **Medical Recommendations:**")
-                            response_parts.append("- Consult with a gastroenterologist for clinical correlation")
-                            response_parts.append("- Follow-up may be needed based on polyp characteristics")
-                            response_parts.append("- Regular screening is important for early detection")
-                        elif "vqa_answer" in result:
-                            response_parts.append("\n💡 **Additional Information:**")
-                            response_parts.append("- This analysis is provided for informational purposes only")
-                            response_parts.append("- For specific medical advice, please consult a healthcare provider")
-                        
-                        # Update conversation history in session state
+                        # 3. CRITICAL FIX: Update conversation history properly
                         if "conversation_history" in result:
-                            session_state["conversation_history"] = result["conversation_history"]
-                            logger.info(f"[APP] Updated session with conversation_history: {len(result['conversation_history'])} entries")
-                            if result["conversation_history"]:
-                                last_entry = result["conversation_history"][-1]
-                                logger.info(f"[APP] Last entry query: {last_entry.get('query', 'Unknown')[:30]}...")
-                                logger.info(f"[APP] Last entry response: {last_entry.get('response', 'Unknown')[:30]}...")
+                            updated_history = result["conversation_history"]
+                            
+                            # Ensure the last entry has the correct query
+                            if updated_history and len(updated_history) > 0:
+                                last_entry = updated_history[-1]
+                                
+                                # CRITICAL FIX: If query is empty or wrong, fix it
+                                if not last_entry.get("query") or last_entry.get("query") != original_message:
+                                    logger.info(f"[FIX] Correcting query in history: '{last_entry.get('query', 'EMPTY')}' -> '{original_message}'")
+                                    last_entry["query"] = original_message
+                            
+                            session_state["conversation_history"] = updated_history
+                            logger.info(f"[FIXED] Updated session with conversation_history: {len(updated_history)} entries")
                         
-                        # Generate streaming response for image mode - start with a header
+                        # Generate streaming response
                         streaming_text = "🔬 **Medical Image Analysis**\n\n"
                         
-                        # Add final details with poly count and tools used
-                        if "final_result" in result and "agent_results" in result["final_result"] and "detector_result" in result["final_result"]["agent_results"]:
-                            detector = result["final_result"]["agent_results"]["detector_result"]
-                            polyp_count = detector.get("count", 0)
-                            if polyp_count > 0:
-                                streaming_text += f"\n\n🔍 **Detected {polyp_count} suspicious area{'s' if polyp_count > 1 else ''}**"
-                                streaming_text += "\n💡 A medical professional should review these findings"
-                                if "viz_image_path" in session_state:
-                                    streaming_text += "\n👁️ Click 'View Results' to see visualized analysis"
-                        
-                        # Record polyp count in state for memory
-                        polyp_count = 0
-                        if "final_result" in result and "agent_results" in result["final_result"] and "detector_result" in result["final_result"]["agent_results"]:
-                            polyp_count = result["final_result"]["agent_results"]["detector_result"].get("count", 0)
-                        session_state["polyp_count"] = polyp_count
-                        
-                        streaming_text += "\n\n" + "\n".join(response_parts)
+                        # Cập nhật header trước
                         history[-1][1] = streaming_text
                         yield "", history, session_state
+                        time.sleep(0.2)
+                        
+                        # Thêm các phần không phải final_answer
+                        non_final_parts = []
+                        final_answer_part = None
+                        
+                        for part in response_parts:
+                            if part.startswith("\n💬 **Medical AI Assessment:**"):
+                                final_answer_part = part
+                            else:
+                                non_final_parts.append(part)
+                        
+                        # Cập nhật phần không phải final_answer
+                        if non_final_parts:
+                            current_text = streaming_text + "\n".join(non_final_parts)
+                            history[-1][1] = current_text
+                            yield "", history, session_state
+                            time.sleep(0.2)
+                            streaming_text = current_text
+                        
+                        # Streaming cho final_answer nếu có
+                        if final_answer_part:
+                            # Hiển thị tiêu đề trước
+                            streaming_text += "\n💬 **Medical AI Assessment:**\n"
+                            history[-1][1] = streaming_text
+                            yield "", history, session_state
+                            time.sleep(0.2)
+                            
+                            # Kiểm tra xem có streaming chunks không
+                            if "response_chunks" in result and result["response_chunks"]:
+                                chunks = result["response_chunks"]
+                                logger.info(f"Found {len(chunks)} streaming chunks for image assessment")
+                                
+                                for chunk in chunks:
+                                    streaming_text += chunk
+                                    history[-1][1] = streaming_text
+                                    yield "", history, session_state
+                                    time.sleep(0.05)  # Điều chỉnh tốc độ streaming
+                            else:
+                                # Lấy nội dung final_answer (bỏ tiêu đề)
+                                final_content = final_answer_part.replace("\n💬 **Medical AI Assessment:**\n", "")
+                                
+                                # Stream từng câu một
+                                sentences = re.split(r'(?<=[.!?])\s+', final_content)
+                                for sentence in sentences:
+                                    if not sentence.strip():
+                                        continue
+                                    streaming_text += sentence + " "
+                                    history[-1][1] = streaming_text
+                                    yield "", history, session_state
+                                    time.sleep(0.05)
+                        else:
+                            # Nếu không có final_answer thì cập nhật tất cả các phần còn lại
+                            streaming_text = "🔬 **Medical Image Analysis**\n\n" + "\n".join(response_parts)
+                            history[-1][1] = streaming_text
+                            yield "", history, session_state
+                        
                     else:
                         error_msg = result.get("error", "Unknown error")
-                        response_parts = []
-                        response_parts.append(f"❌ Error analyzing the image: {error_msg}")
-                        response_parts.append("Please try again or upload a different image.")
+                        response_parts = [f"❌ Error analyzing the image: {error_msg}"]
                         history[-1][1] = "\n".join(response_parts)
                         yield "", history, session_state
+                        
                 else:
-                    # =============  TEXT-ONLY WORKFLOW (SIMPLIFIED) =============
-                    logger.info(f"Processing text-only query: '{message[:50]}...'")
+                    # =============  TEXT-ONLY WORKFLOW =============
+                    logger.info(f"Processing text-only query: '{original_message[:50]}...'")
                     
                     history[-1][1] = "🧠 Consulting via LLaVA..."
                     yield "", history, session_state
                     time.sleep(0.3)
                     
-                    # SIMPLIFIED: Call medical AI with clean parameters
+                    # 4. CRITICAL FIX: Pass original_message to analyze
                     result = self.medical_ai.analyze(
-                        image_path=None,  # No image - triggers text-only mode
-                        query=message,
+                        image_path=None,
+                        query=original_message,  # <-- Use original_message here too
                         medical_context={
                             "user_context": context,
                             "is_text_only": True
-                        } if context else {"is_text_only": True}
+                        } if context else {"is_text_only": True},
+                        conversation_history=session_state.get("conversation_history", []),  # CRITICAL: Pass conversation history
+                        session_id=session_id  # CRITICAL: Pass session_id explicitly
                     )
                     
                     logger.debug(f"Text-only result: success={result.get('success', False)}")
                     
                     if result.get("success", False):
-                        # Stream LLaVA text-only response
-                        history[-1][1] = "📝 Preparing response..."
-                        yield "", history, session_state
-                        time.sleep(0.3)
-                        
-                        # Check if VQA result is successful
+                        # Check VQA result
                         vqa_success = True
                         if "final_result" in result and "agent_results" in result["final_result"] and "vqa_result" in result["final_result"]["agent_results"]:
                             vqa_result = result["final_result"]["agent_results"]["vqa_result"]
                             vqa_success = vqa_result.get("success", False)
                             
                             if not vqa_success:
-                                # VQA/LLaVA failed - show safety error
                                 error_response = "❌ **Medical advisory system unavailable**\n\n"
                                 error_response += vqa_result.get("answer", "An undefined error occurred during consultation.")
-                                error_response += "\n\n🔄 **Please:**\n"
-                                error_response += "- Try again in a few minutes\n"
-                                error_response += "- Or consult a physician directly if needed"
-                                
                                 history[-1][1] = error_response
                                 yield "", history, session_state
-                                return  # Exit early
+                                return
                         
-                        # VQA succeeded - process response
+                        # VQA succeeded
                         if vqa_success and "final_answer" in result:
+                            # Chuẩn bị phần đầu của response (không phải streaming)
                             streaming_text = ""
                             
-                            # Add context if available
                             if context:
                                 streaming_text += "💭 **Based on previous information:**\n"
                                 streaming_text += (context[:200] + "..." if len(context) > 200 else context) + "\n\n"
                             
                             streaming_text += "💬 **Medical AI Response:**\n"
-                            streaming_text += result["final_answer"]
                             
-                            # Add processed by note
-                            streaming_text += "\n\n🔬 **Processed by:** LLaVA-Med (Medical LLM)"
-                            
+                            # Cập nhật phần đầu trước
                             history[-1][1] = streaming_text
                             yield "", history, session_state
+                            time.sleep(0.2)
                             
-                            # Update conversation history in session state
+                            # Thực hiện streaming từ các chunks sẵn có nếu có
+                            if "response_chunks" in result and result["response_chunks"]:
+                                chunks = result["response_chunks"]
+                                logger.info(f"Found {len(chunks)} streaming chunks to display")
+                                
+                                current_text = streaming_text
+                                for chunk in chunks:
+                                    current_text += chunk
+                                    history[-1][1] = current_text
+                                    yield "", history, session_state
+                                    time.sleep(0.05)  # Điều chỉnh tốc độ streaming
+                            else:
+                                # Fallback: Stream từng câu nếu không có chunks
+                                logger.info("No streaming chunks found, falling back to sentence splitting")
+                                final_answer = result["final_answer"]
+                                sentences = re.split(r'(?<=[.!?])\s+', final_answer)
+                                
+                                # Stream từng câu một
+                                current_text = streaming_text
+                                for sentence in sentences:
+                                    if not sentence.strip():
+                                        continue
+                                    current_text += sentence + " "
+                                    history[-1][1] = current_text
+                                    yield "", history, session_state
+                                    time.sleep(0.05)  # Điều chỉnh tốc độ streaming
+                            
+                            # Thêm footer
+                            current_text += "\n\n🔬 **Processed by:** LLaVA-Med (Medical LLM)"
+                            history[-1][1] = current_text
+                            yield "", history, session_state
+                            
+                            # 5. CRITICAL FIX: Update conversation history for text-only too
                             if "conversation_history" in result:
-                                session_state["conversation_history"] = result["conversation_history"]
-                                logger.info(f"[APP] Updated session with conversation_history: {len(result['conversation_history'])} entries")
-                        
-                        else:
-                            # Fallback for no final answer
-                            streaming_text = ""
-                            if context:
-                                streaming_text += "💭 **Based on previous information:**\n"
-                                streaming_text += (context[:200] + "..." if len(context) > 200 else context) + "\n\n"
-                            
-                            streaming_text += "❌ **An error occurred during response generation**\n\n"
-                            streaming_text += "I apologize for the inconvenience. The Medical AI system encountered difficulty processing your query.\n\n"
-                            streaming_text += "Please try again with:\n"
-                            streaming_text += "- A more specific question\n"
-                            streaming_text += "- Different phrasing\n"
-                            streaming_text += "- Or try uploading an image for visual analysis"
-                            
-                            history[-1][1] = streaming_text
-                            yield "", history, session_state
-                    
+                                updated_history = result["conversation_history"]
+                                
+                                # Fix query in last entry if needed
+                                if updated_history and len(updated_history) > 0:
+                                    last_entry = updated_history[-1]
+                                    if not last_entry.get("query") or last_entry.get("query") != original_message:
+                                        logger.info(f"[FIX] Correcting text-only query in history: '{last_entry.get('query', 'EMPTY')}' -> '{original_message}'")
+                                        last_entry["query"] = original_message
+                                
+                                session_state["conversation_history"] = updated_history
+                                logger.info(f"[FIXED] Updated session with text conversation_history: {len(updated_history)} entries")
                     else:
                         # Handle text-only system error
                         logger.error(f"Medical AI system failed: {result.get('error', 'Unknown error')}")
-                        error_response = self._create_system_error_response(message)
+                        error_response = self._create_system_error_response(original_message)  # Use original_message
                         history[-1][1] = error_response
                         yield "", history, session_state
                 
-                # Save to memory
+                # 6. CRITICAL FIX: Save to memory with correct query
                 final_response = history[-1][1]
                 
-                # Safely extract polyp count if available
+                # Extract polyp count if available
                 polyp_count = 0
                 if 'result' in locals() and "final_result" in result and "agent_results" in result["final_result"]:
                     agent_results = result["final_result"]["agent_results"]
                     if "detector_result" in agent_results:
                         polyp_count = agent_results["detector_result"].get("count", 0)
                 
-                # Create complete interaction record
+                # Create complete interaction record with FIXED query
                 interaction = {
-                    "query": message,
+                    "query": original_message,  # <-- CRITICAL FIX: Use original_message
                     "response": final_response,
                     "has_image": has_image,
                     "analysis": result if 'result' in locals() else None,
                     "polyp_count": polyp_count,
                     "is_text_only": not has_image,
                     "timestamp": time.time(),
-                    "session_id": session_id  # Ensure session_id is included
+                    "session_id": session_id
                 }
                 
-                logger.debug(f"Saving interaction to memory: query='{message[:30]}...', has_image={has_image}")
+                logger.debug(f"[FIXED] Saving interaction to memory: query='{original_message[:30]}...', has_image={has_image}")
                 self.memory.add_to_short_term(session_id, interaction)
                 
+                # Ensure conversation history exists in session_state
+                if "conversation_history" not in session_state:
+                    logger.warning(f"conversation_history missing in session_state, initializing new one")
+                    session_state["conversation_history"] = []
+                
+                # If conversation_history was not updated by the workflow (common with image queries)
+                # We manually add the current interaction to it
+                ch_updated = False
+                if "conversation_history" in result:
+                    ch_updated = True
+                    logger.info(f"conversation_history updated by workflow with {len(result['conversation_history'])} entries")
+                
+                # If not updated and session contains empty list or no matching entry, add it manually
+                if not ch_updated:
+                    curr_history = session_state.get("conversation_history", [])
+                    # Check if the current query exists in the history
+                    has_matching_entry = False
+                    for entry in curr_history:
+                        if entry.get("query") == original_message and not entry.get("is_pending", False):
+                            has_matching_entry = True
+                            break
+                    
+                    # If no matching entry, manually add this interaction to history
+                    if not has_matching_entry:
+                        logger.info(f"Manually adding current interaction to conversation_history: '{original_message[:30]}...'")
+                        history_entry = {
+                            "query": original_message,
+                            "response": final_response,
+                            "timestamp": time.time(),
+                            "has_image": has_image,
+                            "session_id": session_id
+                        }
+                        # Add entry to conversation history
+                        curr_history.append(history_entry)
+                        session_state["conversation_history"] = curr_history
+                        logger.info(f"Conversation history updated manually, now has {len(curr_history)} entries")
+                
+                # Debug - log final state of conversation history
+                conversation_history = session_state.get("conversation_history", [])
+                logger.info(f"FINAL conversation_history has {len(conversation_history)} entries")
+                if conversation_history:
+                    for i, entry in enumerate(conversation_history[:]):  # Show last 2 entries
+                        logger.info(f"FINAL HISTORY ENTRY {i}:")
+                        logger.info(f"  - QUERY: {entry.get('query', 'None')[:30]}...")
+                        resp = entry.get('response', 'None')
+                        resp_preview = resp[:30] + "..." if resp and len(resp) > 30 else resp
+                        logger.info(f"  - RESPONSE: {resp_preview}")
+                
                 # Save important interactions to long term
-                if has_image or "polyp" in message.lower() or "medical" in message.lower():
+                if has_image or "polyp" in original_message.lower() or "medical" in original_message.lower():
                     logger.info(f"Saving important interaction to long-term memory for user {user_id}")
                     self.memory.save_to_long_term(user_id, session_id, interaction)
-                
-                # Update session state if needed
-                if "is_fake_streaming_done" not in result or result["is_fake_streaming_done"]:
-                    # Process final response
-                    if isinstance(result, dict) and "final_answer" in result:
-                        # Extract final answer
-                        final_response = result["final_answer"]
-                        
-                        # Update conversation history in session state
-                        if "conversation_history" in result:
-                            session_state["conversation_history"] = result["conversation_history"]
-                            logger.info(f"[APP] Updated session state with conversation_history: {len(result['conversation_history'])} entries")
-                            if result["conversation_history"]:
-                                last_entry = result["conversation_history"][-1]
-                                logger.info(f"[APP] Last entry: {last_entry.get('query', 'Unknown')[:30]}... - {last_entry.get('response', 'Unknown')[:30]}...")
-                        else:
-                            # If no conversation history in result, create one from current interaction
-                            if "conversation_history" not in session_state:
-                                session_state["conversation_history"] = []
-                            
-                            # Add the current interaction to conversation history
-                            user_interaction = {
-                                "query": message,
-                                "response": final_response,
-                                "timestamp": time.time(),
-                                "session_id": session_id,
-                                "is_system": False  # Mark as user interaction
-                            }
-                            session_state["conversation_history"].append(user_interaction)
-                            logger.info(f"[APP] Created new conversation history entry for query: {message[:30]}")
-                        
-                        # Other updates from response
-                        if "session_id" in result:
-                            session_state["session_id"] = result["session_id"]
                 
             except Exception as e:
                 import traceback
                 logger.error(f"Error processing message: {str(e)}")
                 logger.error(traceback.format_exc())
-                error_response = self._create_system_error_response(message)
+                error_response = self._create_system_error_response(original_message)  # Use original_message
                 history[-1][1] = error_response
                 yield "", history, session_state
-        
-        def _create_system_error_response(self, message):
-            """Create system error response with helpful guidance."""
-            error_response = "❌ **System temporarily unavailable**\n\n"
-            error_response += "I apologize for the inconvenience. The LLaVA system is currently unable to process your request.\n\n"
-            error_response += "🔄 **You can try:**\n"
-            error_response += "- Trying again in a few minutes\n"
-            error_response += "- Rephrasing your question\n"
-            error_response += "- Uploading an image for visual analysis\n\n"
-            error_response += "🏥 **For urgent consultation:** Please contact a medical specialist directly."
-            return error_response
-
         def create_enhanced_interface(self):
             """Tạo giao diện với nhiều tính năng hơn."""
             
@@ -664,6 +717,7 @@ def create_enhanced_chatbot():
                             layout="bubble",
                             render_markdown=True,
                             sanitize_html=False,  # FIXED: Allow HTML images
+                            value=[["", "👋 **Hello! I am the Medical AI Assistant, ready to help you analyze medical images or answer any health-related questions. 📸 You can upload endoscopy or X-ray images for me to analyze.💬 Or you can simply ask medical questions without providing any images..\n\n💬 Or you can ask medical questions directly without needing to upload any images."]]
                         )
                         
                         # Input and buttons in a clean layout
@@ -721,6 +775,9 @@ def create_enhanced_chatbot():
                     logger.info(f"[APP] Processing message from {username}: '{message[:50]}...' (if longer)")
                     
                     # Debug session state
+                    logger.info(f"[APP] Current session state keys: {list(state.keys())}")
+                    logger.info(f"[APP] Has session_id: {bool('session_id' in state)}")
+                    
                     if "conversation_history" in state:
                         logger.info(f"[APP] Current session state has conversation_history with {len(state['conversation_history'])} entries")
                         if len(state['conversation_history']) > 0:
@@ -736,13 +793,28 @@ def create_enhanced_chatbot():
                             state["medical_context"] = {}
                         state["medical_context"]["user_info"] = user_info
                         
-                        # Use streaming version
-                        for msg, updated_history, updated_state in self.process_message_streaming(message, image, history, username, state):
-                            yield msg, updated_history, updated_state, None
+                        # Initialize updated_state to avoid UnboundLocalError
+                        updated_state = state.copy()
+                        
+                        # Use streaming version - always pass the SAME state object to ensure session consistency
+                        for msg, updated_history, returned_state in self.process_message_streaming(message, image, history, username, state):
+                            # Merge returned state back into our state to maintain consistency
+                            if returned_state is not None:
+                                for key, value in returned_state.items():
+                                    state[key] = value
+                                # Ensure session_id is preserved
+                                if "session_id" in returned_state:
+                                    logger.info(f"[APP] Preserving session_id: {returned_state['session_id']}")
+                            
+                            # Log session ID after each iteration
+                            if "session_id" in state:
+                                logger.info(f"[APP] Current session_id after iteration: {state['session_id']}")
+                            
+                            yield msg, updated_history, state, None
                         
                         # Check for visualization result
-                        if "last_visualization" in updated_state:
-                            yield msg, updated_history, updated_state, updated_state.get("last_visualization")
+                        if "last_visualization" in state:
+                            yield msg, updated_history, state, state.get("last_visualization")
                             
                     except Exception as e:
                         logger.error(f"Error in safe_process_message_streaming: {str(e)}", exc_info=True)

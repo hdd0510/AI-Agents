@@ -29,105 +29,114 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class LongShortTermMemory:
-    """Hệ thống memory với khả năng lưu trữ ngắn hạn và dài hạn."""
+    """Quản lý short term và long term memory cho Medical AI."""
     
-    def __init__(self, db_path: str = "medical_ai_memory.db"):
-        self.db_path = db_path
-        self.short_term_memory = {}  # Session-based memory
-        self.init_database()
+    def __init__(self, storage_path: str = "data/memory"):
+        self.storage_path = storage_path
+        os.makedirs(storage_path, exist_ok=True)
+        
+        # Short-term memory storage in RAM
+        self.short_term_memory = {}
+        self._load_short_term_memory()
+        
+        # Set up logger
+        self.logger = logging.getLogger("memory.manager")
+        
+    def _load_short_term_memory(self):
+        """Load short-term memory from disk if available."""
+        short_term_path = os.path.join(self.storage_path, "short_term.json")
+        if os.path.exists(short_term_path):
+            try:
+                with open(short_term_path, 'r', encoding='utf-8') as f:
+                    self.short_term_memory = json.load(f)
+                    # Filter out expired sessions (older than 24 hours)
+                    now = time.time()
+                    self.short_term_memory = {
+                        session_id: data 
+                        for session_id, data in self.short_term_memory.items()
+                        if now - data.get("created_at", 0) < 86400  # 24 hours
+                    }
+                    logging.info(f"Loaded {len(self.short_term_memory)} sessions from short-term memory")
+            except Exception as e:
+                logging.error(f"Error loading short-term memory: {str(e)}")
+                self.short_term_memory = {}
     
-    def init_database(self):
-        """Khởi tạo database cho long term memory."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # Bảng lưu conversations
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS conversations (
-                id TEXT PRIMARY KEY,
-                user_id TEXT,
-                timestamp TEXT,
-                query TEXT,
-                response TEXT,
-                image_analysis TEXT,
-                polyp_count INTEGER,
-                session_id TEXT
-            )
-        ''')
-        
-        # Bảng lưu user profiles
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS user_profiles (
-                user_id TEXT PRIMARY KEY,
-                name TEXT,
-                medical_history TEXT,
-                preferences TEXT,
-                last_visit TEXT,
-                total_scans INTEGER DEFAULT 0
-            )
-        ''')
-        
-        # Bảng lưu medical patterns
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS medical_patterns (
-                id TEXT PRIMARY KEY,
-                user_id TEXT,
-                pattern_type TEXT,
-                pattern_data TEXT,
-                frequency INTEGER DEFAULT 1,
-                last_seen TEXT
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
+    def _save_short_term_memory(self):
+        """Save short-term memory to disk."""
+        short_term_path = os.path.join(self.storage_path, "short_term.json")
+        try:
+            with open(short_term_path, 'w', encoding='utf-8') as f:
+                json.dump(self.short_term_memory, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logging.error(f"Error saving short-term memory: {str(e)}")
     
     def get_session_memory(self, session_id: str) -> Dict[str, Any]:
-        """Lấy short term memory cho session."""
+        """Get or create session memory."""
         if session_id not in self.short_term_memory:
             self.short_term_memory[session_id] = {
-                "conversation_history": [],
-                "current_context": {},
-                "user_info": {},
-                "session_start": datetime.datetime.now().isoformat()
+                "created_at": time.time(),
+                "interactions": []
             }
         return self.short_term_memory[session_id]
     
-    def add_to_short_term(self, session_id: str, interaction: Dict[str, Any]):
-        """Thêm tương tác vào short term memory."""
-        memory = self.get_session_memory(session_id)
-        memory["conversation_history"].append({
-            "timestamp": datetime.datetime.now().isoformat(),
-            "interaction": interaction
+    def add_to_short_term(self, session_id: str, interaction: dict) -> None:
+        """Add an interaction to short-term memory."""
+        logger = logging.getLogger("memory.short_term")
+        
+        # Ensure the interaction has the required fields
+        if "query" not in interaction or not interaction["query"]:
+            logger.warning("Tried to save interaction without a query!")
+            if "analysis" in interaction and interaction["analysis"] and "raw_query" in interaction["analysis"]:
+                # Try to recover query from analysis
+                interaction["query"] = interaction["analysis"]["raw_query"]
+                logger.info(f"Recovered query from analysis: {interaction['query'][:30]}...")
+            
+        # Create or get session data
+        if session_id not in self.short_term_memory:
+            self.short_term_memory[session_id] = {
+                "created_at": time.time(),
+                "interactions": []
+            }
+        
+        # Add timestamp if not present
+        if "timestamp" not in interaction:
+            interaction["timestamp"] = time.time()
+            
+        # Add interaction to memory
+        self.short_term_memory[session_id]["interactions"].append(interaction)
+        logger.info(f"Added interaction to short-term memory for session {session_id}: {interaction.get('query', 'Unknown')[:30]}...")
+        
+        # Persist to storage
+        self._save_short_term_memory()
+    
+    def save_to_long_term(self, user_id: str, session_id: str, interaction: Dict[str, Any]) -> None:
+        """Save important interaction to long-term memory."""
+        logger = logging.getLogger("memory.long_term")
+        
+        # Ensure storage directory exists
+        user_dir = os.path.join(self.storage_path, "users", user_id)
+        os.makedirs(user_dir, exist_ok=True)
+        
+        # Create a unique ID for this interaction
+        interaction_id = f"{int(time.time())}_{session_id}"
+        
+        # Add metadata
+        interaction_to_save = interaction.copy()
+        interaction_to_save.update({
+            "interaction_id": interaction_id,
+            "user_id": user_id,
+            "session_id": session_id,
+            "saved_at": time.time()
         })
         
-        # Keep only last 10 interactions in short term
-        if len(memory["conversation_history"]) > 10:
-            memory["conversation_history"] = memory["conversation_history"][-10:]
-    
-    def save_to_long_term(self, user_id: str, session_id: str, interaction: Dict[str, Any]):
-        """Lưu tương tác quan trọng vào long term memory."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        interaction_id = str(uuid.uuid4())
-        cursor.execute('''
-            INSERT INTO conversations 
-            (id, user_id, timestamp, query, response, image_analysis, polyp_count, session_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            interaction_id,
-            user_id,
-            datetime.datetime.now().isoformat(),
-            interaction.get("query", ""),
-            interaction.get("response", ""),
-            json.dumps(interaction.get("analysis", {})),
-            interaction.get("polyp_count", 0),
-            session_id
-        ))
-        
-        conn.commit()
-        conn.close()
+        # Save to user's history
+        history_file = os.path.join(user_dir, "history.jsonl")
+        try:
+            with open(history_file, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(interaction_to_save, ensure_ascii=False) + '\n')
+            logger.info(f"Saved interaction {interaction_id} to long-term memory for user {user_id}")
+        except Exception as e:
+            logger.error(f"Error saving to long-term memory: {str(e)}")
     
     def get_user_history(self, user_id: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Lấy lịch sử tương tác của user."""
@@ -176,38 +185,88 @@ class LongShortTermMemory:
         conn.commit()
         conn.close()
     
-    def get_contextual_prompt(self, session_id: str, user_id: str) -> str:
-        """Tạo prompt với context từ memory."""
-        memory = self.get_session_memory(session_id)
-        history = self.get_user_history(user_id, 3)
-        
+    def get_contextual_prompt(self, session_id: str, user_id: str = None) -> str:
+        """Get contextual information for prompting."""
         context_parts = []
         
-        # Add recent conversation context from the new format
-        # The new format has direct entries in the list, not nested under "interaction"
-        if memory["conversation_history"]:
-            context_parts.append("Recent conversation context:")
-            for conv in memory["conversation_history"][-3:]:
-                # Check if this is using the new format
-                if "query" in conv and "response" in conv:
-                    context_parts.append(f"- User asked: {conv.get('query', '')}")
-                    context_parts.append(f"- System answered: {conv.get('response', '')[:100]}...")
-                # Fallback for old format (can be removed later)
-                elif "interaction" in conv:
-                    interaction = conv["interaction"]
-                    if interaction.get("query"):
-                        context_parts.append(f"- User asked: {interaction['query']}")
-                    if interaction.get("polyp_count", 0) > 0:
-                        context_parts.append(f"- Found {interaction['polyp_count']} polyps")
+        # Get recent interactions from short-term memory
+        if session_id in self.short_term_memory:
+            session_data = self.short_term_memory[session_id]
+            recent_interactions = session_data.get("interactions", [])[-3:]  # Last 3 interactions
+            
+            if recent_interactions:
+                context_parts.append("Based on our recent conversation:")
+                
+                for interaction in recent_interactions:
+                    query = interaction.get("query", "")
+                    response = interaction.get("response", "")
+                    
+                    # Truncate long responses
+                    if len(response) > 150:
+                        response = response[:147] + "..."
+                    
+                    if query:
+                        context_parts.append(f"You asked: {query}")
+                    if response:
+                        context_parts.append(f"I responded: {response}")
+            
+        # Get medical context if user_id is provided
+        if user_id:
+            user_dir = os.path.join(self.storage_path, "users", user_id)
+            history_file = os.path.join(user_dir, "history.jsonl")
+            
+            if os.path.exists(history_file):
+                try:
+                    # Read last 5 entries from history file
+                    recent_history = []
+                    with open(history_file, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            recent_history.append(json.loads(line))
+                            if len(recent_history) >= 5:
+                                recent_history = recent_history[-5:]  # Keep only last 5
+                    
+                    # Extract medical findings
+                    findings = []
+                    for entry in recent_history:
+                        # Check for polyp findings
+                        polyp_count = entry.get("polyp_count", 0)
+                        if polyp_count > 0:
+                            findings.append(f"You previously had {polyp_count} polyp(s) detected.")
+                    
+                    if findings:
+                        context_parts.append("\nMedical context:")
+                        context_parts.extend(findings)
+                        
+                except Exception as e:
+                    logging.error(f"Error reading long-term memory: {str(e)}")
         
-        # Add user history
-        if history:
-            context_parts.append("User's medical scan history:")
-            for h in history:
-                if h["polyp_count"] > 0:
-                    context_parts.append(f"- Previous scan found {h['polyp_count']} polyps")
-        
+        # Combine context
         return "\n".join(context_parts) if context_parts else ""
+
+    def clear_session(self, session_id: str) -> None:
+        """Clear short-term memory for a session."""
+        if session_id in self.short_term_memory:
+            del self.short_term_memory[session_id]
+            self._save_short_term_memory()
+            logging.info(f"Cleared short-term memory for session {session_id}")
+
+    def get_conversation_history(self, session_id: str) -> List[Dict[str, Any]]:
+        """Get conversation history for a session to use with LLM context."""
+        if session_id not in self.short_term_memory:
+            return []
+        
+        # Extract conversation pairs from interactions
+        conversations = []
+        for interaction in self.short_term_memory[session_id].get("interactions", []):
+            if "query" in interaction and interaction.get("query"):
+                conversations.append({
+                    "query": interaction["query"],
+                    "response": interaction.get("response", ""),
+                    "timestamp": interaction.get("timestamp", time.time()),
+                    "session_id": session_id
+                })
+        
+        return conversations
 
 class MedicalAIChatbot:
     """Medical AI Chatbot với Gradio interface."""

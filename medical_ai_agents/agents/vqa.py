@@ -98,6 +98,8 @@ Always use the exact format above. Start with "Thought:"."""
     def _run_react_loop(self, task_input: Dict[str, Any]) -> Dict[str, Any]:
         """Simple ReAct loop với fallback."""
         self.react_history = []
+        # Store current task input for use in _execute_tool
+        self.current_task_input = task_input
         
         for i in range(1, self.max_iterations + 1):
             try:
@@ -166,14 +168,22 @@ Always use the exact format above. Start with "Thought:"."""
             image_path = task_input.get("image_path", "")
             medical_context = task_input.get("medical_context", {})
             
+            # Log important parameters for debugging
+            self.logger.info(f"VQA direct_tool_call - Query: '{query[:50]}...', Image: {image_path}")
+            
             params = {
                 "query": query,
                 "medical_context": medical_context
             }
             
+            # Explicitly check image path and only add if it exists
             if image_path and os.path.exists(image_path):
+                self.logger.info(f"Adding verified image_path to LLaVA tool params: {image_path}")
                 params["image_path"] = image_path
+            else:
+                self.logger.warning(f"Image path not added to params - Path: '{image_path}', Exists: {bool(image_path and os.path.exists(image_path))}")
             
+            # Call LLaVA tool with necessary parameters
             result = self.llava_tool._run(**params)
             
             if result.get("success"):
@@ -191,6 +201,7 @@ Always use the exact format above. Start with "Thought:"."""
                 }
                 
         except Exception as e:
+            self.logger.error(f"Direct call error: {str(e)}")
             return {
                 "success": False,
                 "error": f"Direct call error: {str(e)}",
@@ -372,8 +383,25 @@ Always use the exact format above. Start with "Thought:"."""
         # Get RAG results if available
         rag_result = state.get("rag_result", {})
         
+        # Log the image path information to help with debugging
+        image_path = state.get("image_path", "")
+        if image_path:
+            self.logger.info(f"VQA received image path: {image_path}")
+            if os.path.exists(image_path):
+                self.logger.info(f"Image exists and will be used for VQA analysis")
+            else:
+                self.logger.warning(f"Image path provided but file does not exist: {image_path}")
+        else:
+            self.logger.info("No image path received, will process as text-only query")
+        
+        # If there are polyp detection results, verify that we maintain the image path
+        if "detector_result" in state and state.get("image_path") and not state.get("is_text_only", False):
+            self.logger.info(f"Multi-task workflow: using image from detector task: {state.get('image_path')}")
+            # Force is_text_only to False to ensure image is used
+            state["is_text_only"] = False
+        
         return {
-            "image_path": state.get("image_path", ""),
+            "image_path": image_path,
             "query": state.get("query", ""),
             "medical_context": medical_context,
             "is_text_only": state.get("is_text_only", False),
@@ -422,3 +450,24 @@ Your task as a Medical AI Assistant:
 5. Always identify yourself as a Medical AI Assistant specializing in healthcare
 
 Begin with medical image analysis:"""
+
+    def _execute_tool(self, action: str, action_input: Dict[str, Any]) -> str:
+        """Execute tool with improved image handling."""
+        # If the tool is llava_vqa, ensure image_path is included if available
+        if action == "llava_vqa" and hasattr(self, 'current_task_input'):
+            # Check if image_path exists in current task input but not in action input
+            image_path = self.current_task_input.get("image_path")
+            if image_path and os.path.exists(image_path) and "image_path" not in action_input:
+                self.logger.info(f"Adding missing image_path to llava_vqa tool call: {image_path}")
+                action_input["image_path"] = image_path
+        
+        # Call the base class implementation
+        tool = next((t for t in self.tools if t.name == action), None)
+        if not tool:
+            return f"Error: tool '{action}' not found."
+        try:
+            result = tool(**action_input)
+            return json.dumps(result) if isinstance(result, dict) else str(result)
+        except Exception as e:
+            self.logger.error(f"Tool execution error: {str(e)}")
+            return f"Error executing {action}: {str(e)}"

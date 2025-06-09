@@ -98,6 +98,16 @@ def post_detector_router(state: SystemState) -> str:
     completed_tasks = state.get("completed_tasks", [])
     execution_order = state.get("execution_order", [])
     
+    # Ensure image_path is preserved in state
+    if "image_path" in state and state["image_path"]:
+        logger.info(f"Preserving image path: {state['image_path']} for subsequent tasks")
+        
+        # Verify that the image exists for subsequent tasks
+        if os.path.exists(state["image_path"]):
+            logger.info(f"Image file verified: {state['image_path']}")
+        else:
+            logger.warning(f"Image file does not exist: {state['image_path']} - this may cause issues")
+    
     logger.info(f"Post-detector: Required={required_tasks}, Completed={completed_tasks}")
     
     # Find next task
