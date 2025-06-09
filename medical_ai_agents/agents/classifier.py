@@ -242,6 +242,11 @@ Choose your adaptive strategy and proceed:"""
         classification_done = False
         confidence_assessed = False
         result_validated = False
+        low_confidence_identified = False
+        llm_enhacement_needed = False
+        
+        # Track confidence level to determine if LLM enhancement needed
+        confidence_level = 0.0
         
         if hasattr(self, 'react_history'):
             for step in self.react_history:
@@ -253,19 +258,44 @@ Choose your adaptive strategy and proceed:"""
                                 classification_done = True
                             if "confidence" in obs_data:
                                 confidence_assessed = True
-                            if obs_data.get("confidence", 0) >= 0.7:
-                                result_validated = True
+                                confidence_level = obs_data.get("confidence", 0.0)
+                                
+                                # Check if confidence is low
+                                if confidence_level < 0.6:
+                                    low_confidence_identified = True
+                                    llm_enhacement_needed = True
+                                    
+                                # Higher threshold for validation
+                                if confidence_level >= 0.7:
+                                    result_validated = True
                     except:
                         continue
         
         # Also check final answer quality
         if react_result.get("success") and react_result.get("answer"):
-            result_validated = True  # If we have final answer, consider validated
+            if isinstance(react_result["answer"], dict) and "confidence" in react_result["answer"]:
+                try:
+                    conf = react_result["answer"]["confidence"]
+                    if isinstance(conf, str) and "%" in conf:
+                        conf = float(conf.replace("%", "")) / 100.0
+                    else:
+                        conf = float(conf)
+                    
+                    if conf < 0.6:
+                        low_confidence_identified = True
+                        llm_enhacement_needed = True
+                except:
+                    pass
+            
+            # Consider the answer valid if it exists
+            result_validated = True
         
         return {
             "classification_completed": classification_done,
             "confidence_assessed": confidence_assessed,
-            "result_validated": result_validated
+            "result_validated": result_validated,
+            "low_confidence_identified": low_confidence_identified,
+            "llm_enhancement_needed": llm_enhacement_needed
         }
 
     def _format_agent_result(self, react_result: Dict[str, Any]) -> Dict[str, Any]:
@@ -288,6 +318,16 @@ Choose your adaptive strategy and proceed:"""
         description = ""
         final_answer_data = {}
         strategy_used = "unknown"
+        image_path = ""
+        query = ""
+        
+        # Get image path and query from react history
+        for step in self.react_history:
+            if step.action_input and isinstance(step.action_input, dict):
+                if "image_path" in step.action_input:
+                    image_path = step.action_input["image_path"]
+                if "query" in step.action_input:
+                    query = step.action_input["query"]
         
         # First check if final answer contains structured data
         if react_result.get("answer") and isinstance(react_result["answer"], dict):
@@ -335,8 +375,42 @@ Choose your adaptive strategy and proceed:"""
             
         requirements_met = self._check_core_requirements(react_result)
         
-        # LLM-based synthesis
-        prompt = f"""Bạn là chuyên gia nội soi. Hãy giải thích kết quả phân loại sau cho bệnh nhân một cách dễ hiểu và chuyên nghiệp:\n\n- Kết quả: {class_name}\n- Độ tin cậy: {confidence:.1%}\n- Các lớp khác: {all_classes}\n- Mô tả: {description}\n\nHãy đưa ra nhận định lâm sàng, ý nghĩa kết quả và khuyến nghị nếu có."""
+        # Check if confidence is low for enhanced LLM analysis
+        is_low_confidence = confidence < 0.6
+        
+        # LLM-based synthesis - adaptive based on confidence level
+        if is_low_confidence and image_path:
+            # Enhanced prompt for low confidence scenarios with image reference
+            prompt = f"""Bạn là chuyên gia nội soi. Đây là kết quả phân loại {self.classifier_type} với ĐỘ TIN CẬY THẤP.
+
+Thông tin ảnh:
+- Đường dẫn ảnh: {image_path}
+- Câu hỏi của người dùng: "{query if query else f'Phân loại {self.classifier_type} trong ảnh nội soi này'}"
+
+Kết quả phân loại: 
+- Kết quả: {class_name} 
+- Độ tin cậy: {confidence:.1%} (THẤP)
+- Các lớp khác: {all_classes}
+- Mô tả: {description}
+
+NHIỆM VỤ CỦA BẠN:
+1. Xác nhận ĐỘ TIN CẬY THẤP cho kết quả {class_name}
+2. Phân tích PHÂN PHỐI XÁC SUẤT của các lớp khác
+3. Đề xuất kết luận phù hợp nhất dựa trên kiến thức y khoa của bạn
+4. Mô tả ý nghĩa lâm sàng và khuyến nghị
+
+QUAN TRỌNG: Hãy nêu rõ đây là đánh giá với độ tin cậy thấp và cần thêm kiểm tra bởi chuyên gia."""
+        else:
+            # Standard prompt for normal confidence
+            prompt = f"""Bạn là chuyên gia nội soi. Hãy giải thích kết quả phân loại sau cho bệnh nhân một cách dễ hiểu và chuyên nghiệp:
+
+- Kết quả: {class_name}
+- Độ tin cậy: {confidence:.1%}
+- Các lớp khác: {all_classes}
+- Mô tả: {description}
+
+Hãy đưa ra nhận định lâm sàng, ý nghĩa kết quả và khuyến nghị nếu có."""
+
         try:
             llm_answer = self.llm.invoke([{"role": "user", "content": prompt}]).content.strip()
         except Exception as e:
@@ -354,7 +428,8 @@ Choose your adaptive strategy and proceed:"""
             "core_requirements_met": requirements_met,
             "steps_used": steps_used,
             "synthesis_method": "llm_natural_language",
-            "final_answer_format": "structured" if final_answer_data else "unstructured"
+            "final_answer_format": "structured" if final_answer_data else "unstructured",
+            "is_low_confidence": is_low_confidence
         }
         
         if self.classifier_type == "modality":
@@ -367,8 +442,8 @@ Choose your adaptive strategy and proceed:"""
         return {result_key: classifier_result}
 
     def _perform_text_synthesis(self, class_name: str, confidence: float, 
-                              all_classes: Dict[str, float], llm_answer: str,
-                              requirements_met: Dict[str, bool]) -> str:
+                             all_classes: Dict[str, float], llm_answer: str,
+                             requirements_met: Dict[str, bool]) -> str:
         """
         Perform TEXT-ONLY synthesis without looking at images.
         Analyze tool results and LLM reasoning only.
@@ -376,13 +451,15 @@ Choose your adaptive strategy and proceed:"""
         try:
             # Analyze classification quality
             quality_indicators = []
+            is_low_confidence = False
             
             if confidence >= 0.8:
                 quality_indicators.append("High confidence classification")
             elif confidence >= 0.6:
                 quality_indicators.append("Moderate confidence classification")
             else:
-                quality_indicators.append("Low confidence classification - may need review")
+                quality_indicators.append("LOW CONFIDENCE CLASSIFICATION - REQUIRES EXPERT REVIEW")
+                is_low_confidence = True
             
             # Analyze class distribution
             if all_classes:
@@ -392,6 +469,12 @@ Choose your adaptive strategy and proceed:"""
                     margin = top_2[0][1] - top_2[1][1]
                     if margin < 0.2:
                         quality_indicators.append("Close competition between top classes")
+                        if is_low_confidence:
+                            # Add alternatives analysis for low confidence
+                            alternatives = []
+                            for cls, prob in sorted_classes[:3]:  # Top 3 alternatives
+                                alternatives.append(f"{cls}: {prob:.1%}")
+                            quality_indicators.append(f"Alternative classifications: {', '.join(alternatives)}")
                     else:
                         quality_indicators.append("Clear distinction from other classes")
             
@@ -405,8 +488,13 @@ Choose your adaptive strategy and proceed:"""
                 missing = [req for req, met in requirements_met.items() if not met]
                 quality_indicators.append(f"Missing requirements: {', '.join(missing)}")
             
+            # Title for synthesis with confidence alert if needed
+            title = f"**Guided Adaptive {self.classifier_type.title()} Classification Analysis**"
+            if is_low_confidence:
+                title += " ⚠️ LOW CONFIDENCE ALERT"
+            
             # Synthesize analysis
-            synthesis = f"""**Guided Adaptive {self.classifier_type.title()} Classification Analysis**
+            synthesis = f"""{title}
 
 Classification Result: {class_name} ({confidence:.1%} confidence)
 
@@ -416,9 +504,22 @@ Quality Assessment:
 Tool Performance: Successfully completed classification using adaptive strategy
 Requirements Status: {completed_reqs}/{total_reqs} core requirements met
 
-Clinical Interpretation: {llm_answer[:200]}{'...' if len(llm_answer) > 200 else ''}
+"""
+            
+            # Add additional context for low confidence results
+            if is_low_confidence:
+                synthesis += f"""LLM Analysis for Low Confidence Result:
+The model's confidence is below threshold ({confidence:.1%}). LLM assessment:
+{llm_answer[:300]}{'...' if len(llm_answer) > 300 else ''}
 
-Synthesis Method: Text-only analysis of tool results (no image review required)"""
+"""
+            else:
+                synthesis += f"""Clinical Interpretation:
+{llm_answer[:200]}{'...' if len(llm_answer) > 200 else ''}
+
+"""
+            
+            synthesis += "Synthesis Method: Text-only analysis of tool results (no image review required)"
             
             return synthesis
             

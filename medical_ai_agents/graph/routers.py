@@ -25,8 +25,30 @@ def task_router(state: SystemState) -> str:
     execution_order = state.get("execution_order", [])
     image_path = state.get("image_path", "")
     is_text_only = state.get("is_text_only", False)
+    uploaded_docs = state.get("uploaded_documents", [])
     
     logger.info(f"Routing - Type: {task_type}, Required: {required_tasks}, Completed: {completed_tasks}")
+    
+    # Check for document-related tasks
+    if "document_qa" in required_tasks and not uploaded_docs:
+        logger.info("Document QA requested but no documents uploaded, removing from tasks")
+        required_tasks.remove("document_qa")
+        if "document_qa" in execution_order:
+            execution_order.remove("document_qa")
+    
+    # If documents are present, prioritize RAG
+    if uploaded_docs:
+        valid_docs = []
+        for doc in uploaded_docs:
+            if os.path.exists(doc):
+                valid_docs.append(doc)
+            else:
+                logger.warning(f"Document not found: {doc}")
+        
+        if valid_docs:
+            logger.info(f"Found {len(valid_docs)} valid documents, prioritizing RAG")
+            state["uploaded_documents"] = valid_docs
+            return "rag"
     
     # Text-only queries always go to VQA
     if is_text_only or not image_path or not os.path.exists(image_path):
@@ -49,7 +71,8 @@ def task_router(state: SystemState) -> str:
         "polyp_detection": "detector",
         "modality_classification": "modality_classifier",
         "region_classification": "region_classifier", 
-        "medical_qa": "vqa"
+        "medical_qa": "vqa",
+        "document_qa": "rag"
     }
     
     target = routing_map.get(next_task, "synthesizer")
@@ -115,7 +138,13 @@ def post_modality_router(state: SystemState) -> str:
             next_task = task
             break
     
-    if not next_task:
+    # Check if we have modality_result to determine if we need synthesis
+    modality_result = state.get("modality_result", {})
+    
+    # Route to synthesizer if we have modality result with low confidence
+    # or there are no more tasks
+    if modality_result.get("is_low_confidence", False) or not next_task:
+        logger.info("Routing to synthesizer for modality result analysis")
         return "synthesizer"
     
     # Route to next task
@@ -150,7 +179,13 @@ def post_region_router(state: SystemState) -> str:
             next_task = task
             break
     
-    if not next_task:
+    # Check if we have region_result to determine if we need synthesis
+    region_result = state.get("region_result", {})
+    
+    # Route to synthesizer if we have region result with low confidence
+    # or there are no more tasks
+    if region_result.get("is_low_confidence", False) or not next_task:
+        logger.info("Routing to synthesizer for region result analysis")
         return "synthesizer"
     
     # Route to next task (likely VQA)
@@ -160,15 +195,55 @@ def post_region_router(state: SystemState) -> str:
         return "synthesizer"
 
 def post_vqa_router(state: SystemState) -> str:
-    """Enhanced router after VQA - FIXED VERSION"""
+    """Router after VQA that routes to synthesizer."""
     logger = logging.getLogger("graph.routers.post_vqa")
     
-    print(f"🔧 DEBUG: post_vqa_router input - completed_tasks: {state.get('completed_tasks', [])}")
+    # Mark VQA task as completed
+    state = _mark_task_completed(state, "medical_qa")
     
-    # Mark medical_qa as completed
-    _mark_task_completed(state, "medical_qa")
-    
-    print(f"🔧 DEBUG: post_vqa_router after marking - completed_tasks: {state.get('completed_tasks', [])}")
-    
-    logger.info("Going directly to synthesizer")
+    # Always route to synthesizer
+    logger.info("Routing to synthesizer after VQA")
     return "synthesizer"
+
+def post_vqa_router_with_rag(state: SystemState) -> str:
+    """Router after VQA that checks for uploaded documents and routes to RAG if any are found."""
+    logger = logging.getLogger("graph.routers.post_vqa_rag")
+    
+    # Check for uploaded documents
+    uploaded_docs = state.get("uploaded_documents", [])
+    
+    if uploaded_docs:
+        # Verify document existence
+        valid_docs = []
+        for doc in uploaded_docs:
+            if os.path.exists(doc):
+                valid_docs.append(doc)
+            else:
+                logger.warning(f"Document not found: {doc}")
+        
+        if valid_docs:
+            logger.info(f"Found {len(valid_docs)} valid documents, routing to RAG")
+            return "rag"
+    
+    # No valid documents, proceed to synthesizer
+    logger.info("No valid documents found, proceeding to synthesizer")
+    return "synthesizer"
+
+def post_rag_router(state: SystemState) -> str:
+    """Router after RAG that decides whether to use VQA based on query complexity."""
+    logger = logging.getLogger("graph.routers.post_rag")
+    
+    # Mark RAG task as completed
+    state = _mark_task_completed(state, "document_qa")
+    
+    # Check if we have RAG results and query complexity
+    rag_result = state.get("rag_result", {})
+    query_complexity = rag_result.get("query_complexity", "simple")
+    
+    # Route based on complexity
+    if query_complexity == "complex":
+        logger.info("Complex medical query detected, routing to VQA for specialized knowledge")
+        return "vqa"
+    else:
+        logger.info("Simple document query, skipping VQA and going to synthesizer")
+        return "synthesizer"

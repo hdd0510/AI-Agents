@@ -22,6 +22,7 @@ def task_analyzer(state: SystemState, llm: ChatOpenAI) -> Dict:
     
     query = state.get("query", "")
     is_text_only = state.get("is_text_only", False)
+    uploaded_docs = state.get("uploaded_documents", [])
     
     if is_text_only:
         logger.info("Text-only mode detected")
@@ -35,12 +36,15 @@ def task_analyzer(state: SystemState, llm: ChatOpenAI) -> Dict:
     
     if not query:
         logger.info("No query provided, defaulting to comprehensive analysis")
+        tasks = ["polyp_detection", "modality_classification", "region_classification"]
+        if uploaded_docs:
+            tasks.append("document_qa")
         return {
             **state,
             "task_type": TaskType.COMPREHENSIVE,
-            "required_tasks": ["polyp_detection", "modality_classification", "region_classification"],
+            "required_tasks": tasks,
             "completed_tasks": [],
-            "execution_order": ["polyp_detection", "modality_classification", "region_classification"]
+            "execution_order": tasks
         }
     
     logger.info(f"Analyzing multi-task query: {query}")
@@ -56,12 +60,14 @@ def task_analyzer(state: SystemState, llm: ChatOpenAI) -> Dict:
         - modality_classification: Phân loại kỹ thuật nội soi (BLI, WLI, FICE, LCI)
         - region_classification: Phân loại vị trí giải phẫu trong đường tiêu hóa
         - medical_qa: Trả lời câu hỏi y tế, tư vấn, giải thích
+        - document_qa: Trả lời câu hỏi liên quan đến tài liệu, tài liệu PDF
         
         Hướng dẫn:
         - Nếu hỏi về polyp/tổn thương/phát hiện → bao gồm polyp_detection
         - Nếu hỏi về kỹ thuật/modality/BLI/WLI → bao gồm modality_classification
         - Nếu hỏi về vị trí/anatomy/region → bao gồm region_classification
         - Nếu cần giải thích/tư vấn/phân tích → bao gồm medical_qa
+        - Nếu hỏi về tài liệu/PDF → bao gồm document_qa
         - Câu hỏi phức tạp có thể cần nhiều tác vụ
         
         Trả về danh sách các tác vụ cần thiết, cách nhau bởi dấu phẩy.
@@ -126,7 +132,7 @@ def _parse_multiple_tasks(task_result: str) -> List[str]:
     # Valid task names
     valid_tasks = {
         "polyp_detection", "modality_classification", 
-        "region_classification", "medical_qa"
+        "region_classification", "medical_qa", "document_qa"
     }
     
     # Filter valid tasks
@@ -141,8 +147,11 @@ def _parse_multiple_tasks(task_result: str) -> List[str]:
             parsed_tasks.append("modality_classification")
         elif "region" in task or "location" in task or "anatomy" in task:
             parsed_tasks.append("region_classification")
-        elif "qa" in task or "question" in task or "medical" in task:
-            parsed_tasks.append("medical_qa")
+        elif "qa" in task or "question" in task:
+            if "document" in task or "pdf" in task or "file" in task:
+                parsed_tasks.append("document_qa")
+            else:
+                parsed_tasks.append("medical_qa")
     
     # Remove duplicates while preserving order
     seen = set()
@@ -195,7 +204,8 @@ def _determine_execution_order(required_tasks: List[str]) -> List[str]:
         "polyp_detection",        # 1. Always first (provides context for others)
         "modality_classification", # 2. Technical analysis
         "region_classification",   # 3. Anatomical analysis
-        "medical_qa"              # 4. Always last (synthesis/explanation)
+        "document_qa",            # 4. Document analysis
+        "medical_qa"              # 5. Always last (synthesis/explanation)
     ]
     
     # Sort required tasks by priority
@@ -236,245 +246,214 @@ def _mark_task_completed(state: SystemState, completed_task: str) -> SystemState
 
 # Result Synthesizer
 def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
-    """Synthesize results from all agents into a final answer."""
-    import time
-    logger = logging.getLogger("med.ai.synthesizer")
+    """Tổng hợp kết quả từ nhiều agent thành phản hồi cuối cùng."""
+    logger = logging.getLogger("graph.nodes.result_synthesizer")
     
-    task_type = state.get("task_type", "unknown")
-    logger.info(f"Synthesizing results for task_type: {task_type}")
+    # Calculate processing time
+    start_time = state.get("start_time", time.time())
+    processing_time = time.time() - start_time
     
-    # Get all agent results
+    # Prepare agent results
     agent_results = {}
-    for key, val in state.items():
-        if key.endswith("_result") and isinstance(val, dict):
-            agent_results[key] = val
+    
+    # Add detector results
+    if "detector_result" in state:
+        agent_results["detector"] = state["detector_result"]
+    
+    # Add classifier results
+    if "modality_result" in state:
+        agent_results["modality"] = state["modality_result"]
+    
+    if "region_result" in state:
+        agent_results["region"] = state["region_result"]
+    
+    # Add VQA results
+    if "vqa_result" in state:
+        agent_results["vqa"] = state["vqa_result"]
+    
+    # Add RAG results
+    if "rag_result" in state:
+        agent_results["rag"] = state["rag_result"]
+    
+    # Build LLM prompt based on available results
+    has_detection = "detector" in agent_results
+    has_modality = "modality" in agent_results
+    has_region = "region" in agent_results
+    has_vqa = "vqa" in agent_results 
+    has_rag = "rag" in agent_results
+    
+    # Build simple prompt for synthesis
+    task_context = []
+    
+    if has_detection:
+        task_context.append("polyp detection")
+    if has_modality:
+        task_context.append("modality classification")
+    if has_region:
+        task_context.append("anatomical region classification")
+    if has_rag:
+        task_context.append("document analysis")
+    if has_vqa:
+        task_context.append("medical question answering")
+    
+    tasks_str = ", ".join(task_context)
+    
+    # Determine if the response should prioritize RAG or combined results
+    prioritize_rag = has_rag and "rag" in agent_results and agent_results["rag"].get("query_complexity", "simple") == "simple"
+    
+    # Set up different prompts based on the scenario
+    if prioritize_rag:
+        prompt_template = """You are a medical AI assistant synthesizing results from document analysis. 
+        
+The user asked: "{query}"
 
-    # Identify required and completed tasks
-    required_tasks = []
-    completed_tasks = []
+The document analysis yielded the following information:
+{rag_answer}
+
+Sources cited:
+{rag_sources}
+
+Your task:
+1. Respond to the user's query directly using the document analysis results
+2. Maintain all citations and references to documents
+3. Format your response in a clear, professional manner
+4. Do not add medical disclaimers or warnings"""
+    else:
+        prompt_template = """You are a medical AI assistant synthesizing results from multiple analysis tasks including {tasks}.
+        
+The user asked: "{query}"
+
+Combined analysis results:
+{combined_results}
+
+Your task:
+1. Synthesize these results into a comprehensive, cohesive response
+2. Directly address the user's query with relevant findings
+3. Format your response in a clear, professional manner
+4. IMPORTANT: If any classifications show LOW CONFIDENCE, clearly mention this uncertainty and explain the LLM's analysis
+5. Do not add medical disclaimers or warnings"""
     
-    if task_type == "polyp_detection":
-        required_tasks = ["detector"]
-        if "detector_result" in agent_results:
-            if agent_results["detector_result"].get("success", False):
-                completed_tasks.append("detector")
-    
-    elif task_type == "medical_vqa":
-        required_tasks = ["vqa"]
-        if "vqa_result" in agent_results:
-            if agent_results["vqa_result"].get("success", False):
-                completed_tasks.append("vqa")
-    
-    elif task_type == "comprehensive":
-        required_tasks = ["detector", "modality", "region", "vqa"]
-        for task in required_tasks:
-            result_key = f"{task}_result"
-            if result_key in agent_results:
-                if agent_results[result_key].get("success", False):
-                    completed_tasks.append(task)
-    
-    # Build final result
-    final_result = {
-        "task_type": task_type,
-        "success": True,
-        "session_id": state.get("session_id", ""),
+    # Format the prompt arguments
+    prompt_args = {
         "query": state.get("query", ""),
-        "timestamp": time.time(),
-        "multi_task_analysis": {
-            "required_tasks": required_tasks,
-            "completed_tasks": completed_tasks,
-            "execution_order": state.get("execution_order", []),
-            "task_completion_rate": len(completed_tasks) / len(required_tasks) if required_tasks else 1.0
-        },
-        "agent_results": agent_results,
-        "processing_time": time.time() - state.get("start_time", time.time())
+        "tasks": tasks_str,
     }
     
-    # ALWAYS synthesize with LLM
-    prompt = f"""You are a medical AI assistant providing analysis of an endoscopic image. The user's query is: "{state.get('query', '')}"
-
-Below are the structured results from my analysis. Synthesize these into a natural, conversational response.
-
-I've analyzed the following aspects of the image:
-"""
-    for key, val in agent_results.items():
-        task_name = key.replace('_result', '').title()
-        prompt += f"--- {task_name} Analysis ---\n"
-        # Only include relevant fields from each result
-        important_fields = ['class_name', 'confidence', 'description', 'count', 'objects', 'answer', 'analysis']
-        for k in important_fields:
-            if k in val and val[k] is not None and val[k] != "" and k != "visualization_base64":
-                # Format confidence as percentage
-                if k == 'confidence' and isinstance(val[k], (int, float)):
-                    prompt += f"{k}: {val[k]:.1%}\n"
-                # Format count more naturally
-                elif k == 'count':
-                    prompt += f"Found {val[k]} polyp(s) or abnormalities\n"
-                # Format objects in a more natural way
-                elif k == 'objects' and isinstance(val[k], list) and len(val[k]) > 0:
-                    prompt += f"Detected objects:\n"
-                    for i, obj in enumerate(val[k][:3]):  # Limit to top 3 objects
-                        conf = obj.get("confidence", 0)
-                        pos = obj.get("position_description", "unknown")
-                        prompt += f"  - {pos} with {conf:.1%} confidence\n"
-                else:
-                    prompt += f"{k}: {val[k]}\n"
-        prompt += "\n"
-    
-    prompt += """
-Please create a natural, conversational response that:
-1. Addresses the user directly without mentioning "agents" or "tools"
-2. Presents findings in simple medical terms a patient would understand
-3. Provides a cohesive narrative that integrates all the analysis components
-4. Avoids technical jargon about confidence scores or agent names
-5. Makes recommendations based on the findings if appropriate
-6. Sounds like a unified AI assistant rather than a collection of separate analyses
-
-Response should be in Vietnamese or English matching the user's query language.
-"""
-    
-    # Initialize empty answer string
-    final_answer_text = ""
-    
-    try:
-        messages = [
-            {"role": "system", "content": "You are a helpful, conversational medical AI assistant. You communicate clearly and naturally, as a unified AI system that provides cohesive medical analysis. You avoid technical jargon about confidence scores or agents and present findings in simple terms a patient would understand."},
-            {"role": "user", "content": prompt}
-        ]
+    # Add RAG-specific information if prioritizing RAG
+    if prioritize_rag and has_rag:
+        rag_result = agent_results["rag"]
+        rag_answer = rag_result.get("answer", "")
         
-        # Stream the answer from the LLM
-        print(f"🔧 DEBUG: Starting LLM streaming")
+        # Format sources
+        sources = rag_result.get("sources", [])
+        sources_text = ""
+        for i, source in enumerate(sources):
+            sources_text += f"{i+1}. Document: {source.get('document', 'Unknown')}, Page: {source.get('page', '?')}\n"
         
-        # Create generator config for streaming
-        streaming_llm = llm.with_config({"streaming": True})
-        
-        # Process streaming chunks
-        full_response = ""
-        for chunk in streaming_llm.stream(messages):
-            chunk_text = chunk.content
-            full_response += chunk_text
+        prompt_args["rag_answer"] = rag_answer
+        prompt_args["rag_sources"] = sources_text
+    
+    # Default to combined results
+    combined_results = ""
+    
+    # Add detailed results for different agents
+    if has_detection:
+        detector = agent_results["detector"]
+        if detector.get("success", False):
+            combined_results += f"Polyp Detection: {detector.get('count', 0)} polyp(s) found\n"
+            if detector.get("boxes", []):
+                combined_results += f"Locations: {len(detector.get('boxes', []))} location(s) identified\n"
+    
+    if has_modality:
+        modality = agent_results["modality"]
+        if modality.get("success", False):
+            confidence = modality.get("confidence", 0.0)
+            class_name = modality.get("class_name", "Unknown")
             
-            # Display incremental updates
-            print(f"🔧 DEBUG: LLM chunk: {chunk_text}")
-            
-        # Use the complete streamed response
-        answer = full_response.strip()
-        print(f"🔧 DEBUG: Final LLM answer: {answer[:100]}...")
-        
-        if answer and len(answer) > 10:
-            # Remove the heading for a more natural conversational flow
-            final_result["final_answer"] = answer
-            # Also store the raw response for streaming access
-            final_result["final_answer_raw"] = answer
-            final_result["streaming_enabled"] = True
-        else:
-            final_result["final_answer"] = _generate_multi_task_answer(final_result, llm)
-            final_result["streaming_enabled"] = False
-    except Exception as e:
-        logger.error(f"LLM synthesis failed: {str(e)}")
-        final_result["final_answer"] = _generate_multi_task_answer(final_result, llm)
-        final_result["streaming_enabled"] = False
-        
-    print(f"🔧 DEBUG: Final answer: {final_result.get('final_answer', '')[:200]}...")
-    logger.info("Synthesis complete with streaming capability")
-    return {**state, "final_result": final_result}
-
-def _generate_multi_task_answer(result: Dict[str, Any], llm: ChatOpenAI) -> str:
-    """Generate a natural, conversational fallback answer."""
-    agent_results = result["agent_results"]
-    query = result.get("query", "")
-    
-    # Gather information from different results
-    findings = []
-    
-    # Detection information
-    if "detector_result" in agent_results:
-        det = agent_results["detector_result"]
-        if det.get("success"):
-            count = det.get("count", 0)
-            if count > 0:
-                objects = det.get("objects", [])
-                if objects:
-                    # Just gather information, don't format yet
-                    for obj in objects[:3]:  # Limit to top 3
-                        findings.append({
-                            "type": "polyp",
-                            "confidence": obj.get("confidence", 0),
-                            "position": obj.get("position_description", "")
-                        })
+            # Handle low confidence results
+            if modality.get("is_low_confidence", False):
+                combined_results += f"Imaging Modality: {class_name} (LOW CONFIDENCE: {confidence:.1%})\n"
+                combined_results += f"LLM Analysis of Modality: {modality.get('analysis', '')[:300]}...\n"
             else:
-                findings.append({"type": "no_polyps"})
+                combined_results += f"Imaging Modality: {class_name} ({confidence:.1%} confidence)\n"
+            
+    if has_region:
+        region = agent_results["region"]
+        if region.get("success", False):
+            confidence = region.get("confidence", 0.0)
+            class_name = region.get("class_name", "Unknown")
+            
+            # Handle low confidence results
+            if region.get("is_low_confidence", False):
+                combined_results += f"Anatomical Region: {class_name} (LOW CONFIDENCE: {confidence:.1%})\n"
+                combined_results += f"LLM Analysis of Region: {region.get('analysis', '')[:300]}...\n"
+            else:
+                combined_results += f"Anatomical Region: {class_name} ({confidence:.1%} confidence)\n"
+    if has_rag:
+        rag = agent_results["rag"]
+        if rag.get("success", False):
+            combined_results += f"Document Analysis: {len(rag.get('documents_processed', []))} document(s) processed\n"
+            combined_results += f"Found {rag.get('chunks_retrieved', 0)} relevant passages\n"
+            combined_results += f"Document Answer: {rag.get('answer', 'No clear answer found')}\n"
     
-    # Modality information
-    if "modality_result" in agent_results:
-        mod = agent_results["modality_result"]
-        if mod.get("success"):
-            modality = mod.get("class_name", "Unknown")
-            if modality != "Unknown":
-                findings.append({
-                    "type": "modality",
-                    "name": modality,
-                    "description": mod.get("description", "")
-                })
+    if has_vqa:
+        vqa = agent_results["vqa"]
+        if vqa.get("success", False):
+            combined_results += f"Medical Analysis: {vqa.get('answer', 'No clear answer provided')}\n"
     
-    # Region information
-    if "region_result" in agent_results:
-        reg = agent_results["region_result"]
-        if reg.get("success"):
-            region = reg.get("class_name", "Unknown")
-            if region != "Unknown":
-                findings.append({
-                    "type": "region",
-                    "name": region,
-                    "description": reg.get("description", "")
-                })
+    prompt_args["combined_results"] = combined_results
     
-    # VQA information (direct answers)
-    vqa_answer = ""
-    if "vqa_result" in agent_results:
-        vqa = agent_results["vqa_result"]
-        if vqa.get("success"):
-            vqa_answer = vqa.get("answer", "")
+    # Build the prompt with the appropriate template
+    prompt = PromptTemplate.from_template(
+        prompt_template 
+    )
     
-    # Now create a natural language response
+    # Create the chain
+    chain = prompt | llm | StrOutputParser()
     
-    # If we have a VQA answer, use it as the primary response
-    if vqa_answer:
-        return vqa_answer
-    
-    # Otherwise, create a response from findings
-    response_parts = []
-    
-    # Handle polyp findings
-    polyp_findings = [f for f in findings if f.get("type") == "polyp"]
-    if polyp_findings:
-        if len(polyp_findings) == 1:
-            p = polyp_findings[0]
-            response_parts.append(f"Tôi đã phát hiện một polyp ở vị trí {p['position']}.")
+    # Invoke the chain
+    try:
+        synthesized_response = chain.invoke(prompt_args)
+        
+        # Build the final result
+        final_result = {
+            "task_type": state.get("task_type", "comprehensive"),
+            "success": True,
+            "session_id": state.get("session_id", ""),
+            "query": state.get("query", ""),
+            "timestamp": time.time(),
+            "multi_task_analysis": {
+                "tasks_requested": state.get("required_tasks", []),
+                "tasks_completed": state.get("completed_tasks", []),
+                "execution_order": state.get("execution_order", [])
+            },
+            "agent_results": agent_results,
+            "response": synthesized_response,
+            "processing_time": processing_time
+        }
+        
+        return {**state, "final_result": final_result}
+        
+    except Exception as e:
+        logger.error(f"Result synthesis failed: {str(e)}")
+        
+        # Fallback to direct response
+        if has_vqa:
+            fallback_response = agent_results["vqa"].get("answer", "")
+        elif has_rag:
+            fallback_response = agent_results["rag"].get("answer", "")
         else:
-            response_parts.append(f"Tôi đã phát hiện {len(polyp_findings)} polyp trong hình ảnh.")
-            for i, p in enumerate(polyp_findings[:2], 1):
-                response_parts.append(f"- Polyp {i} ở vị trí {p['position']}")
-    elif any(f.get("type") == "no_polyps" for f in findings):
-        response_parts.append("Tôi không phát hiện polyp nào trong hình ảnh này.")
-    
-    # Handle modality and region in one sentence if available
-    modality = next((f for f in findings if f.get("type") == "modality"), None)
-    region = next((f for f in findings if f.get("type") == "region"), None)
-    
-    if modality and region:
-        response_parts.append(f"Đây là hình ảnh nội soi loại {modality['name']} của vùng {region['name']}.")
-    elif modality:
-        response_parts.append(f"Đây là hình ảnh nội soi loại {modality['name']}.")
-    elif region:
-        response_parts.append(f"Hình ảnh cho thấy vùng {region['name']}.")
-    
-    # If we have no findings to report, provide a generic response
-    if not response_parts:
-        response_parts.append("Tôi đã phân tích hình ảnh nội soi của bạn nhưng không thể đưa ra kết luận cụ thể. Vui lòng thử lại với hình ảnh rõ ràng hơn hoặc cung cấp thêm thông tin.")
-    
-    # If this is a response to a specific query, add that context
-    if query:
-        response_parts.append(f"Về câu hỏi của bạn: '{query}', tôi chưa thể đưa ra câu trả lời cụ thể. Vui lòng cung cấp thêm thông tin hoặc đặt câu hỏi rõ ràng hơn.")
-    
-    return " ".join(response_parts)
+            fallback_response = "I couldn't synthesize a comprehensive answer due to an error."
+        
+        final_result = {
+            "task_type": state.get("task_type", "comprehensive"),
+            "success": False,
+            "error": str(e),
+            "session_id": state.get("session_id", ""),
+            "query": state.get("query", ""),
+            "timestamp": time.time(),
+            "response": fallback_response,
+            "processing_time": processing_time
+        }
+        
+        return {**state, "final_result": final_result}

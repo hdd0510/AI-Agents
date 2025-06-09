@@ -296,25 +296,38 @@ Always use the exact format above. Start with "Thought:"."""
         return f"""**MEDICAL CONSULTATION SYNTHESIS**\n\nOriginal Query: \"{query}\"\nHas Image: {has_image}\n\nTool Execution Results:\n{results_text}\n\n**YOUR TASK:**\nAnalyze the tool results above and provide a comprehensive final medical consultation response.\n\n**Requirements:**\n1. Synthesize information from all successful tool executions\n2. Provide clear, professional medical advice\n4. Recommend next steps or follow-up if needed\n5. Be concise but thorough\n\n**Format your response as a complete medical consultation answer.**"""
 
     def _format_agent_result(self, react_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Format agent result."""
+        """Format VQA result."""
         if not react_result.get("success", False):
             return {
                 "vqa_result": {
                     "success": False,
                     "error": react_result.get("error", "VQA processing failed"),
-                    "iterations_used": react_result.get("iterations_used", 0)
+                    "approach": "llava"
                 }
             }
         
-        return {
-            "vqa_result": {
-                "success": True,
-                "answer": react_result.get("answer", ""),
-                "iterations_used": react_result.get("iterations_used", 0),
-                "termination_reason": react_result.get("termination_reason", "completed"),
-                "tool_results_count": react_result.get("tool_results_count", 0)
-            }
+        # Extract answer and confidence
+        answer = react_result.get("answer", "")
+        confidence = react_result.get("confidence", 0.0)
+        
+        # Check if RAG information was used
+        used_rag = False
+        if hasattr(self, 'react_history'):
+            for step in self.react_history:
+                if step.observation and "rag_result" in step.observation:
+                    used_rag = True
+                    break
+        
+        # Create final result
+        vqa_result = {
+            "success": True,
+            "answer": answer,
+            "confidence": confidence,
+            "approach": "llava",
+            "used_rag": used_rag
         }
+        
+        return {"vqa_result": vqa_result}
 
     def initialize(self) -> bool:
         """Initialize VQA agent."""
@@ -355,25 +368,55 @@ Always use the exact format above. Start with "Thought:"."""
                     "confidence": region.get("confidence", 0)
                 }
         
+        # Get RAG results if available
+        rag_result = state.get("rag_result", {})
+        
         return {
             "image_path": state.get("image_path", ""),
             "query": state.get("query", ""),
             "medical_context": medical_context,
-            "is_text_only": state.get("is_text_only", False)
+            "is_text_only": state.get("is_text_only", False),
+            "rag_result": rag_result
         }
 
     def _format_task_input(self, task_input: Dict[str, Any]) -> str:
-        """Format task input."""
+        """Format task input for VQA processing."""
         query = task_input.get("query", "")
-        has_image = bool(task_input.get("image_path") and os.path.exists(task_input.get("image_path", "")))
+        image_path = task_input.get("image_path", "")
+        medical_context = task_input.get("medical_context", {})
+        rag_result = task_input.get("rag_result", {})
         
-        return f"""**MEDICAL CONSULTATION REQUEST**
+        # Build context string
+        context_parts = []
+        if medical_context:
+            if "polyp_findings" in medical_context:
+                findings = medical_context["polyp_findings"]
+                context_parts.append(f"- Polyp detection: {findings['count']} polyp(s) found")
+            if "imaging_type" in medical_context:
+                context_parts.append(f"- Imaging type: {medical_context['imaging_type']}")
+            if "anatomical_region" in medical_context:
+                context_parts.append(f"- Anatomical region: {medical_context['anatomical_region']}")
+        
+        context_str = "\n".join(context_parts) if context_parts else "No additional context"
+        
+        # Add RAG information if available
+        rag_info = ""
+        if rag_result and rag_result.get("success", False):
+            if "vqa_summary" in rag_result and rag_result["vqa_summary"]:
+                rag_info = f"\nRelevant information from documents:\n{rag_result['vqa_summary']}"
+        
+        return f"""**VISUAL QUESTION ANSWERING TASK**
 
-Query: "{query}"
-Image Available: {has_image}
+User Query: "{query}"
 
-Provide medical consultation using available tools. Follow exact format:
+Medical Context:
+{context_str}
+{rag_info}
 
-Thought: [reasoning]
-Action: [llava_vqa or Final Answer]
-Action Input: {{"param": "value"}}"""
+Your task:
+1. Analyze the image and provide a detailed answer
+2. If document information is provided, incorporate it into your answer
+3. Ensure your answer is comprehensive and well-supported
+4. Use medical terminology appropriately
+
+Begin with image analysis:"""

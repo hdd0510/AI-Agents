@@ -21,7 +21,7 @@ class VectorSearchTool(BaseTool):
     """Tool tìm kiếm semantic trong knowledge base."""
     
     def __init__(self, 
-                 knowledge_base_path: str,
+                 storage_path: str,
                  embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
                  device: str = "cuda",
                  index_path: Optional[str] = None,
@@ -32,10 +32,10 @@ class VectorSearchTool(BaseTool):
             description="Tìm kiếm semantic trong knowledge base sử dụng vector embeddings."
         )
         
-        self.knowledge_base_path = knowledge_base_path
+        self.storage_path = storage_path
         self.embedding_model_name = embedding_model
         self.device = device
-        self.index_path = index_path or os.path.join(knowledge_base_path, "vector_index")
+        self.index_path = index_path or os.path.join(storage_path, "vector_index")
         
         # Initialize components
         self.embedding_model = None
@@ -141,9 +141,9 @@ class VectorSearchTool(BaseTool):
         documents = []
         
         try:
-            knowledge_path = Path(self.knowledge_base_path)
+            knowledge_path = Path(self.storage_path)
             if not knowledge_path.exists():
-                self.logger.error(f"Knowledge base path does not exist: {self.knowledge_base_path}")
+                self.logger.error(f"Knowledge base path does not exist: {self.storage_path}")
                 return documents
             
             # Support different file types

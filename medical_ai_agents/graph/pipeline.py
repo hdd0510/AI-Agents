@@ -15,13 +15,14 @@ from medical_ai_agents.config import MedicalGraphConfig, SystemState
 from medical_ai_agents.agents.detector import DetectorAgent
 from medical_ai_agents.agents.classifier import ClassifierAgent
 from medical_ai_agents.agents.vqa import VQAAgent
+from medical_ai_agents.agents.rag import RAGAgent
 from medical_ai_agents.graph.nodes import (
     task_analyzer, result_synthesizer
 )
 from medical_ai_agents.graph.routers import (
     task_router, post_detector_router, 
     post_modality_router, post_region_router, 
-    post_vqa_router
+    post_vqa_router, post_rag_router
 )
 
 def create_medical_ai_graph(config: MedicalGraphConfig):
@@ -31,6 +32,11 @@ def create_medical_ai_graph(config: MedicalGraphConfig):
     # Initialize agents (unchanged)
     logger.info("Initializing agents...")
     
+    rag_agent = RAGAgent(
+        storage_path=config.rag_storage_path,  # Add to config
+        device=config.device
+    )
+
     detector_agent = DetectorAgent(
         model_path=config.detector_model_path,
         device=config.device
@@ -69,6 +75,7 @@ def create_medical_ai_graph(config: MedicalGraphConfig):
     # Add nodes
     workflow.add_node("task_analyzer", lambda state: task_analyzer(state, llm))
     workflow.add_node("detector", detector_agent)
+    workflow.add_node("rag", rag_agent)
     workflow.add_node("modality_classifier", modality_classifier_agent)
     workflow.add_node("region_classifier", region_classifier_agent)
     workflow.add_node("vqa", vqa_agent)
@@ -86,6 +93,23 @@ def create_medical_ai_graph(config: MedicalGraphConfig):
             "modality_classifier": "modality_classifier",
             "region_classifier": "region_classifier",
             "vqa": "vqa",
+            "rag": "rag",
+            "synthesizer": "synthesizer"
+        }
+    )
+
+    workflow.add_conditional_edges(
+        "rag",
+        post_rag_router,
+        {
+            "vqa": "vqa"
+        }
+    )
+    
+    workflow.add_conditional_edges(
+        "vqa",
+        post_vqa_router,
+        {
             "synthesizer": "synthesizer"
         }
     )
@@ -120,14 +144,6 @@ def create_medical_ai_graph(config: MedicalGraphConfig):
         }
     )
     
-    workflow.add_conditional_edges(
-        "vqa",
-        post_vqa_router,
-        {
-            "synthesizer": "synthesizer"
-        }
-    )
-
     workflow.add_edge("synthesizer", END)
     
     # Compile with checkpointing

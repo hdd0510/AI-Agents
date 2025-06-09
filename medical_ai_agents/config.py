@@ -103,6 +103,7 @@ class MedicalGraphConfig:
     modality_classifier_path: str = "medical_ai_agents/weights/modal_best.pt"
     region_classifier_path: str = "medical_ai_agents/weights/location_best.pt"
     vqa_model_path: str = "medical_ai_agents/weights/llava-med-mistral-v1.5-7b"
+    rag_storage_path: str = "medical_ai_agents/rag_storage"
     
     # LLM config (unchanged)
     llm_model: str = "gpt-4o"

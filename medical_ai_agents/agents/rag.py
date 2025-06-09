@@ -2,527 +2,364 @@
 # -*- coding: utf-8 -*-
 
 """
-Medical AI Agents - RAG Agent với LightRAG
------------------------------------------
-Agent RAG sử dụng LightRAG để truy xuất thông tin y tế từ knowledge base.
+LIGHT RAG AGENT - Simple Document Retrieval
+=========================================
+RAG agent đơn giản để xử lý PDF và DOC files upload.
 """
 
-import asyncio
-import os
 import json
-from typing import Dict, Any, List, Optional
 import logging
-
-from medical_ai_agents.agents.base_agent import BaseAgent
+from typing import Dict, Any, List, Optional
+from pathlib import Path
+import os
+from medical_ai_agents.agents.base_agent import BaseAgent, ThoughtType, ReActStep
 from medical_ai_agents.tools.base_tools import BaseTool
-
-class LightRAGTool(BaseTool):
-    """Tool sử dụng LightRAG để thực hiện RAG operations."""
-    
-    def __init__(self, working_dir: str = "./rag_storage", device: str = "cuda", **kwargs):
-        """Initialize LightRAG tool."""
-        super().__init__(
-            name="lightrag_query",
-            description="Truy xuất thông tin y tế từ knowledge base sử dụng LightRAG với graph-based indexing."
-        )
-        self.working_dir = working_dir
-        self.device = device
-        self.rag = None
-        self._initialize()
-    
-    def _initialize(self) -> bool:
-        """Initialize LightRAG system."""
-        try:
-            # Import LightRAG components
-            from lightrag import LightRAG, QueryParam
-            from lightrag.llm.openai import gpt_4o_mini_complete, openai_embed
-            from lightrag.utils import setup_logger
-            
-            # Setup logger
-            setup_logger("lightrag", level="INFO")
-            
-            # Create working directory
-            if not os.path.exists(self.working_dir):
-                os.makedirs(self.working_dir, exist_ok=True)
-            
-            # Initialize LightRAG
-            self.rag = LightRAG(
-                working_dir=self.working_dir,
-                llm_model_func=gpt_4o_mini_complete,
-                embedding_func=openai_embed,
-                # Graph storage configuration
-                graph_storage="NetworkXStorage",  # Default graph storage
-                # Vector storage configuration  
-                vector_storage="NanoVectorDBStorage",  # Default vector storage
-                # KV storage configuration
-                kv_storage="JsonKVStorage",  # Default key-value storage
-                # Processing configuration
-                chunk_token_size=1200,
-                chunk_overlap_token_size=100,
-                max_async=4,
-                max_tokens=32768,
-                # Retrieval configuration
-                top_k=60,
-                # Language configuration for medical domain
-                language="english"
-            )
-            
-            self.logger.info("LightRAG initialized successfully")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Failed to initialize LightRAG: {str(e)}")
-            return False
-    
-    def _run(self, query: str, mode: str = "hybrid", medical_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Run RAG query."""
-        if self.rag is None:
-            return {"success": False, "error": "LightRAG not initialized"}
-        
-        try:
-            # Import QueryParam
-            from lightrag import QueryParam
-            
-            # Create enhanced query with medical context
-            enhanced_query = self._enhance_query(query, medical_context)
-            
-            # Create query parameters
-            query_param = QueryParam(
-                mode=mode,  # hybrid, local, global, naive, mix
-                # Additional parameters for medical domain
-                only_need_context=False,
-                response_type="stream" if mode == "stream" else "text"
-            )
-            
-            # Execute query - LightRAG is async, so we need to handle it properly
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            try:
-                # Run the async query
-                result = loop.run_until_complete(
-                    self.rag.aquery(enhanced_query, param=query_param)
-                )
-            finally:
-                loop.close()
-            
-            # Parse and enhance result
-            parsed_result = self._parse_result(result, query, mode)
-            
-            return {
-                "success": True,
-                "answer": parsed_result["answer"],
-                "context": parsed_result.get("context", []),
-                "confidence": parsed_result.get("confidence", 0.8),
-                "sources": parsed_result.get("sources", []),
-                "mode": mode,
-                "query": query,
-                "enhanced_query": enhanced_query
-            }
-            
-        except Exception as e:
-            import traceback
-            return {
-                "success": False,
-                "error": str(e),
-                "traceback": traceback.format_exc()
-            }
-    
-    def _enhance_query(self, query: str, medical_context: Optional[Dict[str, Any]] = None) -> str:
-        """Enhance query with medical context."""
-        if not medical_context:
-            return query
-        
-        context_parts = []
-        
-        # Add detection context
-        if "detected_polyps" in medical_context:
-            count = medical_context["detected_polyps"]
-            if count > 0:
-                context_parts.append(f"Given that {count} polyp(s) were detected in the image")
-                
-                if "polyp_details" in medical_context:
-                    context_parts.append(f"with details: {medical_context['polyp_details']}")
-        
-        # Add imaging context
-        if "imaging_modality" in medical_context:
-            modality = medical_context["imaging_modality"]
-            context_parts.append(f"using {modality} imaging technique")
-        
-        # Add anatomical context
-        if "anatomical_region" in medical_context:
-            region = medical_context["anatomical_region"]
-            context_parts.append(f"in the {region} region")
-        
-        # Add patient context
-        if "patient_history" in medical_context:
-            history = medical_context["patient_history"]
-            context_parts.append(f"considering patient history: {history}")
-        
-        # Combine context with query
-        if context_parts:
-            context_str = ", ".join(context_parts)
-            enhanced_query = f"Medical context: {context_str}. Question: {query}"
-        else:
-            enhanced_query = query
-        
-        return enhanced_query
-    
-    def _parse_result(self, result: str, original_query: str, mode: str) -> Dict[str, Any]:
-        """Parse and enhance LightRAG result."""
-        # Basic parsing - LightRAG returns text response
-        parsed = {
-            "answer": result,
-            "confidence": self._estimate_confidence(result),
-            "sources": self._extract_sources(result),
-            "context": []
-        }
-        
-        # Add mode-specific insights
-        if mode == "local":
-            parsed["retrieval_type"] = "Entity-specific retrieval focusing on precise medical facts"
-        elif mode == "global":
-            parsed["retrieval_type"] = "Concept-level retrieval for broader medical understanding"
-        elif mode == "hybrid":
-            parsed["retrieval_type"] = "Combined entity and concept retrieval for comprehensive medical analysis"
-        elif mode == "naive":
-            parsed["retrieval_type"] = "Traditional vector similarity search"
-        
-        return parsed
-    
-    def _estimate_confidence(self, answer: str) -> float:
-        """Estimate confidence based on answer quality."""
-        if not answer or len(answer.strip()) < 10:
-            return 0.3
-        
-        # Lower confidence indicators
-        uncertainty_terms = [
-            "i'm not sure", "unclear", "cannot determine", "difficult to say",
-            "may be", "might be", "possibly", "uncertain", "not clear"
-        ]
-        
-        answer_lower = answer.lower()
-        confidence = 0.9
-        
-        for term in uncertainty_terms:
-            if term in answer_lower:
-                confidence -= 0.1
-                break
-        
-        # Higher confidence indicators
-        certainty_terms = [
-            "according to", "based on", "research shows", "studies indicate",
-            "medical literature", "clinical evidence"
-        ]
-        
-        for term in certainty_terms:
-            if term in answer_lower:
-                confidence += 0.1
-                break
-        
-        return max(0.0, min(1.0, confidence))
-    
-    def _extract_sources(self, answer: str) -> List[str]:
-        """Extract potential sources from answer."""
-        # Simple heuristic to identify source mentions
-        sources = []
-        
-        # Look for common source patterns
-        source_patterns = [
-            "according to", "based on", "from", "reference:",
-            "study by", "research by", "published in"
-        ]
-        
-        answer_lower = answer.lower()
-        for pattern in source_patterns:
-            if pattern in answer_lower:
-                # This is a simplified extraction - could be enhanced
-                sources.append(f"Referenced in answer via '{pattern}'")
-        
-        return sources
-    
-    def insert_documents(self, documents: List[str]) -> Dict[str, Any]:
-        """Insert documents into LightRAG knowledge base."""
-        if self.rag is None:
-            return {"success": False, "error": "LightRAG not initialized"}
-        
-        try:
-            # Handle async insertion
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            try:
-                # Insert documents asynchronously
-                for doc in documents:
-                    loop.run_until_complete(self.rag.ainsert(doc))
-            finally:
-                loop.close()
-            
-            return {
-                "success": True,
-                "inserted_count": len(documents),
-                "message": f"Successfully inserted {len(documents)} documents into knowledge base"
-            }
-            
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
-    def get_parameters_schema(self) -> Dict[str, Any]:
-        """Return JSON schema for the tool parameters."""
-        return {
-            "query": {
-                "type": "string",
-                "description": "Medical question or query to search for"
-            },
-            "mode": {
-                "type": "string",
-                "description": "Retrieval mode: hybrid, local, global, naive, mix",
-                "enum": ["hybrid", "local", "global", "naive", "mix"],
-                "default": "hybrid"
-            },
-            "medical_context": {
-                "type": "object",
-                "description": "Optional medical context from other agents",
-                "required": False
-            }
-        }
-
+from medical_ai_agents.tools.rag.doc_reader import PDFDocReaderTool
+from medical_ai_agents.tools.rag.vector_search import VectorSearchTool
+from medical_ai_agents.tools.rag.chunk_retriever import ChunkRetrieverTool
 
 class RAGAgent(BaseAgent):
-    """Agent RAG sử dụng LightRAG để truy xuất thông tin y tế."""
+    """
+    Light RAG Agent for Document Q&A
     
-    def __init__(self, working_dir: str = "./rag_storage", 
-                 knowledge_base_path: Optional[str] = None,
-                 llm_model: str = "gpt-4o-mini", device: str = "cuda"):
-        """
-        Khởi tạo RAG Agent với LightRAG.
+    WORKFLOW:
+    1. Load and parse uploaded PDFs/DOCs
+    2. Create vector embeddings
+    3. Search relevant chunks based on query
+    4. Synthesize answer from retrieved chunks
+    """
+    
+    def __init__(self, 
+                 storage_path: str = "./rag_storage",
+                 llm_model: str = "gpt-4o-mini", 
+                 device: str = "cuda",
+                 chunk_size: int = 500,
+                 overlap: int = 50):
+        """Initialize Light RAG Agent."""
+        self.storage_path = Path(storage_path)
+        self.storage_path.mkdir(exist_ok=True)
+        self.chunk_size = chunk_size
+        self.overlap = overlap
         
-        Args:
-            working_dir: Thư mục làm việc cho LightRAG
-            knowledge_base_path: Đường dẫn đến file knowledge base (optional)
-            llm_model: Mô hình LLM sử dụng làm controller
-            device: Device để chạy (cuda/cpu)
-        """
-        self.working_dir = working_dir
-        self.knowledge_base_path = knowledge_base_path
+        super().__init__(name="Light RAG Agent", llm_model=llm_model, device=device)
         
-        super().__init__(name="RAG Agent", llm_model=llm_model, device=device)
-        self.lightrag_tool = None
+        # Configuration
+        self.max_iterations = 4  # Read -> Index -> Search -> Answer
+        
+        # Tools will be initialized in _register_tools
+        self.reader_tool = None
+        self.search_tool = None
+        self.retriever_tool = None
     
     def _register_tools(self) -> List[BaseTool]:
-        """Register tools for this agent."""
-        self.lightrag_tool = LightRAGTool(
-            working_dir=self.working_dir,
+        """Register RAG tools."""
+        self.reader_tool = PDFDocReaderTool(
+            storage_path=str(self.storage_path),
+            chunk_size=self.chunk_size,
+            overlap=self.overlap
+        )
+        
+        self.search_tool = VectorSearchTool(
+            storage_path=str(self.storage_path),
             device=self.device
         )
-        return [self.lightrag_tool]
+        
+        self.retriever_tool = ChunkRetrieverTool(
+            storage_path=str(self.storage_path)
+        )
+        
+        return [self.reader_tool, self.search_tool, self.retriever_tool]
     
+    def _get_agent_description(self) -> str:
+        """Agent description."""
+        return """I am a document retrieval specialist that can:
+        
+1. Read and parse PDF/DOC files
+2. Create searchable vector indexes
+3. Find relevant information based on queries
+4. Synthesize comprehensive answers from documents
+
+I use a simple but effective RAG pipeline optimized for medical documents."""
+
     def _get_system_prompt(self) -> str:
-        """Get the system prompt that defines this agent's role."""
-        return """Bạn là một AI chuyên gia về truy xuất và phân tích thông tin y tế sử dụng RAG (Retrieval-Augmented Generation).
-Nhiệm vụ của bạn là trả lời câu hỏi y tế dựa trên knowledge base sử dụng LightRAG với graph-based indexing.
+        """System prompt for RAG agent."""
+        return f"""You are a document retrieval and Q&A specialist using RAG (Retrieval-Augmented Generation).
 
-Bạn có thể sử dụng công cụ sau:
-1. lightrag_query: Truy xuất thông tin từ knowledge base y tế
-   - Tham số: query (str), mode (str), medical_context (Dict, optional)
-   - Các mode: hybrid (default), local, global, naive, mix
-   - Kết quả: câu trả lời, context, độ tin cậy, và sources
+AVAILABLE TOOLS:
+{self.tool_descriptions}
 
-Các mode retrieval:
-- hybrid: Kết hợp entity-level và concept-level retrieval (khuyến nghị cho hầu hết trường hợp)
-- local: Tập trung vào thông tin cụ thể, chi tiết (cho câu hỏi về thuật ngữ, định nghĩa)  
-- global: Tập trung vào khái niệm rộng, mối quan hệ (cho câu hỏi về xu hướng, tổng quan)
-- naive: Traditional vector similarity search
-- mix: Kết hợp tất cả các phương pháp
+WORKFLOW:
+1. First, check if documents are already indexed using chunk_retriever
+2. If new documents uploaded, use pdf_doc_reader to parse them
+3. Use simple_vector_search to find relevant chunks based on the query
+4. Evaluate query complexity:
+   - If it's a COMPLEX MEDICAL QUESTION, prepare context for VQA Agent
+   - If it's a SIMPLE DOCUMENT QUESTION, answer directly yourself
 
-Quy trình làm việc của bạn:
-1. Phân tích câu hỏi y tế và xác định mode retrieval phù hợp
-2. Tích hợp thông tin từ các agent khác (detector, classifier, VQA) vào medical_context
-3. Sử dụng công cụ lightrag_query để truy xuất thông tin
-4. Phân tích kết quả và đánh giá độ tin cậy
-5. Tổng hợp câu trả lời cuối cùng với nguồn tham khảo
+EVALUATION CRITERIA:
+- Complex medical questions: require specialized medical knowledge, involve diagnoses, treatments, complex procedures
+- Simple document questions: factual information directly from documents, basic explanations, definitions
 
-Khi trả lời:
-- Ưu tiên sử dụng thông tin từ knowledge base
-- Kết hợp với context từ hình ảnh nếu có
-- Đưa ra độ tin cậy và sources
-- Giải thích lý do chọn mode retrieval cụ thể
-- Cảnh báo nếu thông tin không đầy đủ hoặc cần xác nhận thêm
+RULES:
+- Always cite which document and page the information comes from
+- If no relevant information found, clearly state that
+- Prioritize accuracy over completeness
+- Use medical terminology appropriately when dealing with medical documents
 
-Bạn phải trả về JSON với định dạng:
-```json
-{
-  "rag_result": {
-    "success": true/false,
-    "answer": "câu trả lời chi tiết dựa trên knowledge base",
-    "confidence": confidence_value,
-    "sources": ["list of sources"],
-    "retrieval_mode": "mode đã sử dụng",
-    "context_used": "mô tả context từ các agent khác",
-    "analysis": "phân tích về chất lượng và độ tin cậy của thông tin"
-  }
-}
-```"""
+Follow the ReAct format:
+Thought: [your reasoning]
+Action: [tool name or Final Answer]
+Action Input: {{"param": "value"}}"""
 
     def initialize(self) -> bool:
-        """Khởi tạo agent và load knowledge base nếu có."""
+        """Initialize RAG agent."""
         try:
-            # Tools are already initialized in _register_tools
-            
-            # Load knowledge base if provided
-            if self.knowledge_base_path and os.path.exists(self.knowledge_base_path):
-                self._load_knowledge_base()
+            # Check if vector index exists
+            index_path = self.storage_path / "vector_index.pkl"
+            if index_path.exists():
+                self.logger.info("Found existing vector index")
+            else:
+                self.logger.info("No existing index found, will create on first document")
             
             self.initialized = True
+            self.logger.info("Light RAG Agent initialized successfully")
             return True
+            
         except Exception as e:
-            self.logger.error(f"Failed to initialize RAG agent: {str(e)}")
-            self.initialized = False
+            self.logger.error(f"Failed to initialize RAG Agent: {str(e)}")
             return False
-    
-    def _load_knowledge_base(self):
-        """Load knowledge base từ file."""
-        try:
-            with open(self.knowledge_base_path, 'r', encoding='utf-8') as f:
-                if self.knowledge_base_path.endswith('.json'):
-                    data = json.load(f)
-                    if isinstance(data, list):
-                        documents = data
-                    else:
-                        documents = [json.dumps(data)]
-                else:
-                    # Plain text file
-                    content = f.read()
-                    documents = [content]
-            
-            # Insert into LightRAG
-            result = self.lightrag_tool.insert_documents(documents)
-            if result["success"]:
-                self.logger.info(f"Loaded knowledge base: {result['message']}")
-            else:
-                self.logger.error(f"Failed to load knowledge base: {result['error']}")
-            
-        except Exception as e:
-            self.logger.error(f"Error loading knowledge base: {str(e)}")
-    
+
     def _extract_task_input(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract task-specific input from state."""
-        # Get results from other agents for context
-        detector_result = state.get("detector_result", {})
-        modality_result = state.get("modality_result", {})
-        region_result = state.get("region_result", {})
-        vqa_result = state.get("vqa_result", {})
+        """Extract RAG task input."""
+        # Check for uploaded documents
+        uploaded_docs = state.get("uploaded_documents", [])
         
-        # Build medical context
-        medical_context = {}
-        
-        # Add detection context
-        if detector_result and detector_result.get("success", False):
-            objects = detector_result.get("objects", [])
-            medical_context["detected_polyps"] = len(objects)
-            
-            if objects:
-                # Add details about detected polyps
-                polyp_details = []
-                for i, obj in enumerate(objects[:3]):  # Top 3 objects
-                    detail = f"Polyp {i+1}: {obj.get('confidence', 0):.2f} confidence"
-                    if 'position_description' in obj:
-                        detail += f", location: {obj['position_description']}"
-                    polyp_details.append(detail)
-                medical_context["polyp_details"] = "; ".join(polyp_details)
-        
-        # Add classification context
-        if modality_result and modality_result.get("success", False):
-            medical_context["imaging_modality"] = modality_result.get("class_name", "Unknown")
-        
-        if region_result and region_result.get("success", False):
-            medical_context["anatomical_region"] = region_result.get("class_name", "Unknown")
-        
-        # Add VQA context if available
-        if vqa_result and vqa_result.get("success", False):
-            medical_context["previous_analysis"] = vqa_result.get("answer", "")
-        
-        # Add user-provided context
-        user_context = state.get("medical_context", {})
-        if user_context:
-            medical_context.update(user_context)
+        # Get context from other agents
+        medical_context = self._build_rag_context(state)
         
         return {
             "query": state.get("query", ""),
+            "uploaded_documents": uploaded_docs,
             "medical_context": medical_context,
-            "image_path": state.get("image_path", "")
+            "require_sources": True  # Always cite sources
         }
-    
-    def _format_task_input(self, task_input: Dict[str, Any]) -> str:
-        """Format task input for LLM prompt."""
-        query = task_input.get("query", "")
-        context = task_input.get("medical_context", {})
+
+    def _build_rag_context(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Build context from other agents for better retrieval."""
+        context = {}
         
-        context_str = "\n".join([f"- {k}: {v}" for k, v in context.items()]) if context else "None"
-        
-        return f"""Medical Query: {query if query else "Provide general medical information relevant to the context"}
-
-Available Medical Context:
-{context_str}
-
-Hãy phân tích câu hỏi này và sử dụng công cụ lightrag_query để truy xuất thông tin y tế phù hợp.
-
-Bước 1: Xác định mode retrieval phù hợp:
-- hybrid: cho câu hỏi phức tạp cần cả thông tin cụ thể và tổng quan
-- local: cho câu hỏi về định nghĩa, triệu chứng cụ thể
-- global: cho câu hỏi về xu hướng, mối quan hệ rộng
-
-Bước 2: Sử dụng công cụ:
-Tool: lightrag_query
-Parameters: {{"query": "câu hỏi", "mode": "mode_phù_hợp", "medical_context": context_dict}}
-
-Bước 3: Phân tích kết quả và đưa ra câu trả lời cuối cùng."""
-    
-    def _format_synthesis_input(self) -> str:
-        pass
-
-    def _extract_agent_result(self, synthesis: str) -> Dict[str, Any]:
-        """Extract agent result from LLM synthesis."""
-        try:
-            # Try to extract JSON
-            json_start = synthesis.find('{')
-            json_end = synthesis.rfind('}') + 1
-            
-            if json_start >= 0 and json_end > json_start:
-                json_str = synthesis[json_start:json_end]
-                rag_result = json.loads(json_str)
-                return rag_result
-            
-            # Fallback: Create result from synthesis text
-            return {
-                "rag_result": {
-                    "success": True,
-                    "answer": synthesis,
-                    "confidence": 0.7,
-                    "sources": [],
-                    "retrieval_mode": "unknown",
-                    "analysis": "Generated from LLM synthesis without explicit RAG result"
+        # Add detection context
+        if "detector_result" in state:
+            detector = state["detector_result"]
+            if detector.get("success", False):
+                context["polyp_findings"] = {
+                    "count": detector.get("count", 0),
+                    "detected": detector.get("count", 0) > 0
                 }
-            }
-            
-        except Exception as e:
-            self.logger.error(f"Failed to extract agent result: {str(e)}")
+        
+        # Add classification context
+        if "modality_result" in state:
+            modality = state["modality_result"]
+            if modality.get("success", False):
+                context["imaging_type"] = modality.get("class_name", "Unknown")
+        
+        if "region_result" in state:
+            region = state["region_result"]
+            if region.get("success", False):
+                context["anatomical_region"] = region.get("class_name", "Unknown")
+        
+        return context
+
+    def _format_task_input(self, task_input: Dict[str, Any]) -> str:
+        """Format task input for RAG processing."""
+        query = task_input.get("query", "")
+        uploaded_docs = task_input.get("uploaded_documents", [])
+        medical_context = task_input.get("medical_context", {})
+        
+        # Build context string
+        context_parts = []
+        if medical_context:
+            if "polyp_findings" in medical_context:
+                findings = medical_context["polyp_findings"]
+                context_parts.append(f"- Polyp detection: {findings['count']} polyp(s) found")
+            if "imaging_type" in medical_context:
+                context_parts.append(f"- Imaging type: {medical_context['imaging_type']}")
+            if "anatomical_region" in medical_context:
+                context_parts.append(f"- Anatomical region: {medical_context['anatomical_region']}")
+        
+        context_str = "\n".join(context_parts) if context_parts else "No additional context"
+        
+        # Format document info
+        doc_info = ""
+        if uploaded_docs:
+            doc_info = f"\nUploaded documents ({len(uploaded_docs)} files):\n"
+            for doc in uploaded_docs[:5]:  # Show first 5
+                doc_info += f"- {os.path.basename(doc) if os.path.exists(doc) else doc}\n"
+        
+        return f"""**DOCUMENT RETRIEVAL TASK**
+
+User Query: "{query if query else 'Please analyze the uploaded documents'}"
+
+Medical Context:
+{context_str}
+{doc_info}
+
+Your task:
+1. If new documents uploaded, read and index them first
+2. Search for relevant information based on the query
+3. Provide comprehensive answer with proper citations
+4. Prepare a summary for VQA to help answer the query better
+
+Begin with checking document status:"""
+
+    def _format_agent_result(self, react_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Format RAG result."""
+        if not react_result.get("success", False):
             return {
                 "rag_result": {
                     "success": False,
-                    "error": str(e),
-                    "answer": synthesis,
-                    "confidence": 0.5
+                    "error": react_result.get("error", "RAG processing failed"),
+                    "approach": "light_rag"
                 }
             }
-    
-    def add_documents(self, documents: List[str]) -> Dict[str, Any]:
-        """Add documents to knowledge base."""
+        
+        # Extract answer and sources from ReAct history
+        answer = react_result.get("answer", "")
+        sources = []
+        chunks_retrieved = 0
+        documents_processed = []
+        vqa_summary = ""
+        query_complexity = "simple"  # Default to simple
+        
+        # Analyze ReAct history
+        if hasattr(self, 'react_history'):
+            for step in self.react_history:
+                if step.observation and step.action:
+                    try:
+                        obs_data = json.loads(step.observation)
+                        
+                        # Track document processing
+                        if "pdf_doc_reader" in step.action and obs_data.get("success"):
+                            if "documents_processed" in obs_data:
+                                documents_processed.extend(obs_data["documents_processed"])
+                        
+                        # Track search results
+                        if "vector_search" in step.action and obs_data.get("success"):
+                            if "chunks" in obs_data:
+                                chunks_retrieved = len(obs_data["chunks"])
+                                # Extract sources
+                                for chunk in obs_data["chunks"]:
+                                    source = {
+                                        "document": chunk.get("source", "Unknown"),
+                                        "page": chunk.get("page", 0),
+                                        "score": chunk.get("score", 0.0)
+                                    }
+                                    if source not in sources:
+                                        sources.append(source)
+                    except:
+                        continue
+                
+                # Check if a complexity assessment was made in the thought
+                if step.thought and ("complex medical" in step.thought.lower() or "specialized knowledge" in step.thought.lower()):
+                    query_complexity = "complex"
+                
+                # Look for explicit complexity evaluation
+                if step.thought and "query complexity:" in step.thought.lower():
+                    thought_lower = step.thought.lower()
+                    if "complex" in thought_lower and "medical" in thought_lower:
+                        query_complexity = "complex"
+                    elif "simple" in thought_lower and ("document" in thought_lower or "factual" in thought_lower):
+                        query_complexity = "simple"
+        
+        # Create VQA summary if needed for complex queries
+        if query_complexity == "complex" and chunks_retrieved > 0:
+            vqa_summary = self._create_vqa_summary(react_result)
+        
+        # Create final result
+        rag_result = {
+            "success": True,
+            "answer": answer,
+            "sources": sources[:5],  # Top 5 sources
+            "chunks_retrieved": chunks_retrieved,
+            "documents_processed": list(set(documents_processed)),
+            "approach": "light_rag",
+            "has_citations": len(sources) > 0,
+            "query_complexity": query_complexity,
+            "vqa_summary": vqa_summary if query_complexity == "complex" else ""
+        }
+        
+        # Add quality metrics
+        if chunks_retrieved > 0:
+            rag_result["retrieval_quality"] = "high" if chunks_retrieved >= 3 else "moderate"
+        else:
+            rag_result["retrieval_quality"] = "no_retrieval"
+        
+        return {"rag_result": rag_result}
+
+    def _create_vqa_summary(self, react_result: Dict[str, Any]) -> str:
+        """Create a summary for VQA from retrieved chunks."""
+        try:
+            # Extract chunks from ReAct history
+            chunks = []
+            if hasattr(self, 'react_history'):
+                for step in self.react_history:
+                    if step.observation and "vector_search" in step.action:
+                        try:
+                            obs_data = json.loads(step.observation)
+                            if obs_data.get("success") and "chunks" in obs_data:
+                                chunks.extend(obs_data["chunks"])
+                        except:
+                            continue
+            
+            if not chunks:
+                return ""
+            
+            # Sort chunks by relevance score
+            chunks.sort(key=lambda x: x.get("score", 0), reverse=True)
+            
+            # Take top 3 most relevant chunks
+            top_chunks = chunks[:3]
+            
+            # Create summary
+            summary_parts = []
+            for chunk in top_chunks:
+                content = chunk.get("content", "").strip()
+                source = chunk.get("source", "Unknown")
+                page = chunk.get("page", 0)
+                score = chunk.get("score", 0)
+                
+                if content:
+                    summary_parts.append(f"From {source} (page {page}, relevance: {score:.2f}):\n{content}\n")
+            
+            return "\n".join(summary_parts)
+            
+        except Exception as e:
+            self.logger.error(f"Failed to create VQA summary: {str(e)}")
+            return ""
+
+    def add_documents(self, file_paths: List[str]) -> Dict[str, Any]:
+        """Public method to add documents to RAG system."""
         if not self.initialized:
             self.initialize()
         
-        return self.lightrag_tool.insert_documents(documents)
-    
+        try:
+            # Use reader tool to process documents
+            result = self.reader_tool._run(file_paths=file_paths)
+            
+            if result.get("success"):
+                # Trigger indexing
+                self.search_tool.update_index()
+                
+                return {
+                    "success": True,
+                    "message": f"Successfully processed {len(result.get('documents_processed', []))} documents",
+                    "documents": result.get("documents_processed", [])
+                }
+            else:
+                return result
+                
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to add documents: {str(e)}"
+            }
