@@ -291,7 +291,7 @@ def create_enhanced_chatbot():
                         
                         # Generate streaming response for image mode - start with a header
                         streaming_text = "🔬 **Medical Image Analysis**\n\n"
-                        
+
                         if "final_answer" in result:
                             final_answer = result["final_answer"]
                             

@@ -126,8 +126,9 @@ class LLaVATool(BaseTool):
             from llava.conversation import conv_templates, SeparatorStyle
             from llava.mm_utils import process_images, tokenizer_image_token
             
-            # Handle both image and text-only cases
-            has_image = image_path is not None and os.path.exists(image_path)
+            # Check both the explicit text_only flag and image path
+            is_text_only = medical_context is not None and medical_context.get("is_text_only", False)
+            has_image = image_path is not None and os.path.exists(image_path) and not is_text_only
             
             if has_image:
                 # Load real image

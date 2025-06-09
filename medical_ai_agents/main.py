@@ -103,7 +103,21 @@ class EnhancedMedicalAISystem:
             
             # Return final result
             if "final_result" in final_state and final_state["final_result"]:
-                return final_state["final_result"]
+                final_result = final_state["final_result"]
+                
+                # Thêm final_answer để app.py có thể sử dụng
+                if "response" in final_result and final_result["response"]:
+                    final_result["final_answer"] = final_result["response"]
+                elif "agent_results" in final_result:
+                    # Fallback từ các kết quả agent nếu không có response tổng hợp
+                    agent_results = final_result["agent_results"]
+                    if "region_result" in agent_results and agent_results["region_result"].get("success", False):
+                        region = agent_results["region_result"]
+                        final_result["final_answer"] = f"Vùng giải phẫu: {region.get('class_name', 'Unknown')} ({region.get('confidence', 0.0):.1%})\n\n{region.get('analysis', '')}"
+                    elif "vqa_result" in agent_results and agent_results["vqa_result"].get("success", False):
+                        final_result["final_answer"] = agent_results["vqa_result"].get("answer", "")
+                
+                return final_result
             else:
                 # fallback result
                 fallback_result = {

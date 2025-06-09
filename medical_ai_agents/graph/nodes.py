@@ -173,7 +173,7 @@ def _keyword_based_task_analysis(query: str) -> List[str]:
     required_tasks = []
     
     # Detection keywords
-    if any(kw in query_lower for kw in ["polyp", "tổn thương", "phát hiện", "detect", "find", "abnormal", "lesion"]):
+    if any(kw in query_lower for kw in ["polyp", "tổn thương", "phát hiện", "detect", " ", "abnormal", "lesion"]):
         required_tasks.append("polyp_detection")
     
     # Modality keywords
@@ -429,7 +429,8 @@ Your task:
             },
             "agent_results": agent_results,
             "response": synthesized_response,
-            "processing_time": processing_time
+            "processing_time": processing_time,
+            "final_answer": synthesized_response
         }
         
         return {**state, "final_result": final_result}
@@ -453,7 +454,8 @@ Your task:
             "query": state.get("query", ""),
             "timestamp": time.time(),
             "response": fallback_response,
-            "processing_time": processing_time
+            "processing_time": processing_time,
+            "final_answer": fallback_response
         }
         
         return {**state, "final_result": final_result}
