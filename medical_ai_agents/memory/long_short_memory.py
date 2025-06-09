@@ -19,6 +19,7 @@ import tempfile
 from pathlib import Path
 import logging
 import base64
+import time
 
 # Import medical AI system
 from medical_ai_agents import MedicalAISystem, MedicalGraphConfig
@@ -182,15 +183,22 @@ class LongShortTermMemory:
         
         context_parts = []
         
-        # Add recent conversation context
+        # Add recent conversation context from the new format
+        # The new format has direct entries in the list, not nested under "interaction"
         if memory["conversation_history"]:
             context_parts.append("Recent conversation context:")
             for conv in memory["conversation_history"][-3:]:
-                interaction = conv["interaction"]
-                if interaction.get("query"):
-                    context_parts.append(f"- User asked: {interaction['query']}")
-                if interaction.get("polyp_count", 0) > 0:
-                    context_parts.append(f"- Found {interaction['polyp_count']} polyps")
+                # Check if this is using the new format
+                if "query" in conv and "response" in conv:
+                    context_parts.append(f"- User asked: {conv.get('query', '')}")
+                    context_parts.append(f"- System answered: {conv.get('response', '')[:100]}...")
+                # Fallback for old format (can be removed later)
+                elif "interaction" in conv:
+                    interaction = conv["interaction"]
+                    if interaction.get("query"):
+                        context_parts.append(f"- User asked: {interaction['query']}")
+                    if interaction.get("polyp_count", 0) > 0:
+                        context_parts.append(f"- Found {interaction['polyp_count']} polyps")
         
         # Add user history
         if history:
@@ -241,6 +249,31 @@ class MedicalAIChatbot:
             response_parts = []
             analysis_result = None
             
+            # Get session memory
+            session_memory = self.memory.get_session_memory(session_id)
+            
+            # Get conversation history from memory or initialize
+            conversation_history = session_memory.get("conversation_history", [])
+            
+            # Debug conversation history state
+            logger.info(f"[MEMORY] Processing message, current conversation history has {len(conversation_history)} entries")
+            if len(conversation_history) > 0:
+                logger.info(f"[MEMORY] Last history entry: {conversation_history[-1].get('query', 'NO_QUERY')[:30]}...")
+            
+            # Initialize system message if this is a new conversation
+            if not conversation_history:
+                logger.info("[MEMORY] Initializing new conversation history")
+                # Add a welcome message as the first system message
+                conversation_history.append({
+                    "query": "",  # Empty query because this isn't a user question
+                    "response": "Hello! I'm your Medical AI Assistant specializing in healthcare consultation. How can I assist you with your medical questions today?",
+                    "timestamp": time.time(),
+                    "is_system": True,  # Clearly mark as system message
+                    "type": "init"  # Add a type to identify this as initialization
+                })
+                session_memory["conversation_history"] = conversation_history
+                logger.info(f"[MEMORY] Added system welcome message, history now has {len(conversation_history)} entries")
+            
             # Get contextual information
             context = self.memory.get_contextual_prompt(session_id, user_id)
             
@@ -252,10 +285,54 @@ class MedicalAIChatbot:
                 result = self.medical_ai.analyze(
                     image_path=image,
                     query=message,
-                    medical_context={"user_context": context} if context else None
+                    medical_context={"user_context": context} if context else None,
+                    conversation_history=conversation_history
                 )
                 
                 analysis_result = result
+                
+                # Debug conversation history before and after
+                logger.info(f"[IMAGE] Memory conversation history BEFORE: {len(conversation_history)} entries")
+                if conversation_history:
+                    for i, entry in enumerate(conversation_history[-2:]):  # Show last 2 entries
+                        logger.info(f"[IMAGE] BEFORE - ENTRY {i}:")
+                        logger.info(f"  - TYPE: {'SYSTEM' if entry.get('is_system', False) else 'USER'}")
+                        logger.info(f"  - QUERY: {entry.get('query', 'None')[:30]}...")
+                        resp = entry.get('response', 'None')
+                        resp_preview = resp[:30] + "..." if resp and len(resp) > 30 else resp
+                        logger.info(f"  - RESPONSE: {resp_preview}")
+                
+                # Update conversation history from the system response
+                if "conversation_history" in result:
+                    # Clean up only pending entries that match the current query
+                    clean_history = []
+                    for entry in conversation_history:
+                        if entry.get("is_pending", False) and entry.get("query") == message:
+                            logger.info(f"Removing pending entry for query: {message[:30]}...")
+                        else:
+                            clean_history.append(entry)
+                    
+                    # Get the newest entry from the result
+                    new_entries = []
+                    if result["conversation_history"]:
+                        latest_entry = result["conversation_history"][-1]
+                        if latest_entry.get("query") == message:
+                            new_entries.append(latest_entry)
+                            logger.info(f"Adding new complete entry for query: {message[:30]}...")
+                    
+                    # Create final merged history
+                    conversation_history = clean_history + new_entries
+                    session_memory["conversation_history"] = conversation_history
+                    
+                    # Debug updated conversation history
+                    logger.info(f"[IMAGE] Memory conversation history AFTER: {len(conversation_history)} entries")
+                    if conversation_history:
+                        for i, entry in enumerate(conversation_history[-1:]):  # Show last entry
+                            logger.info(f"[IMAGE] AFTER - ENTRY {i}:")
+                            logger.info(f"  - QUERY: {entry.get('query', 'None')[:30]}...")
+                            resp = entry.get('response', 'None')
+                            resp_preview = resp[:30] + "..." if resp and len(resp) > 30 else resp
+                            logger.info(f"  - RESPONSE: {resp_preview}")
                 
                 if result.get("success", False):
                     # Chỉ hiển thị final_answer nếu có
@@ -307,25 +384,80 @@ class MedicalAIChatbot:
                     response_parts.append("💭 **Dựa trên thông tin trước đó:**")
                     response_parts.append(context[:200] + "..." if len(context) > 200 else context)
                 
-                response_parts.append("💬 **Trả lời:**")
-                response_parts.append("Tôi có thể giúp bạn phân tích hình ảnh nội soi và trả lời các câu hỏi y tế. ")
-                response_parts.append("Vui lòng tải lên hình ảnh để tôi có thể hỗ trợ tốt hơn.")
+                # Process text-only query with Medical AI
+                result = self.medical_ai.analyze(
+                    query=message,
+                    medical_context={"user_context": context} if context else None,
+                    conversation_history=conversation_history
+                )
+                
+                analysis_result = result
+                
+                # Debug conversation history before and after
+                logger.info(f"Memory conversation history BEFORE: {len(conversation_history)} entries")
+                if conversation_history:
+                    for i, entry in enumerate(conversation_history[-2:]):  # Show last 2 entries
+                        logger.info(f"BEFORE - ENTRY {i}:")
+                        logger.info(f"  - TYPE: {'SYSTEM' if entry.get('is_system', False) else 'USER'}")
+                        logger.info(f"  - QUERY: {entry.get('query', 'None')[:30]}...")
+                        resp = entry.get('response', 'None')
+                        resp_preview = resp[:30] + "..." if resp and len(resp) > 30 else resp
+                        logger.info(f"  - RESPONSE: {resp_preview}")
+                
+                # Update conversation history from the system response
+                if "conversation_history" in result:
+                    # Clean up only pending entries that match the current query
+                    clean_history = []
+                    for entry in conversation_history:
+                        if entry.get("is_pending", False) and entry.get("query") == message:
+                            logger.info(f"Removing pending entry for query: {message[:30]}...")
+                        else:
+                            clean_history.append(entry)
+                    
+                    # Get the newest entry from the result
+                    new_entries = []
+                    if result["conversation_history"]:
+                        latest_entry = result["conversation_history"][-1]
+                        if latest_entry.get("query") == message:
+                            new_entries.append(latest_entry)
+                            logger.info(f"Adding new complete entry for query: {message[:30]}...")
+                    
+                    # Create final merged history
+                    conversation_history = clean_history + new_entries
+                    session_memory["conversation_history"] = conversation_history
+                    
+                    # Debug updated conversation history
+                    logger.info(f"Memory conversation history AFTER: {len(conversation_history)} entries")
+                    if conversation_history:
+                        for i, entry in enumerate(conversation_history[-1:]):  # Show last entry
+                            logger.info(f"AFTER - ENTRY {i}:")
+                            logger.info(f"  - QUERY: {entry.get('query', 'None')[:30]}...")
+                            resp = entry.get('response', 'None')
+                            resp_preview = resp[:30] + "..." if resp and len(resp) > 30 else resp
+                            logger.info(f"  - RESPONSE: {resp_preview}")
+                
+                if result.get("success", False) and "final_answer" in result:
+                    response_parts.append("💬 **Response:**")
+                    response_parts.append(result["final_answer"])
+                else:
+                    response_parts.append("💬 **Response:**")
+                    response_parts.append("I can help you analyze endoscopy images and answer medical questions.")
+                    response_parts.append("Please upload an image so I can provide better assistance.")
             
             final_response = "\n".join(response_parts)
             
-            # Save to memory
-            interaction = {
-                "query": message,
-                "response": final_response,
-                "has_image": image is not None,
-                "analysis": analysis_result,
-                "polyp_count": analysis_result.get("polyp_count", 0) if analysis_result else 0
-            }
-            
-            self.memory.add_to_short_term(session_id, interaction)
+            # Save to memory - we're now using the updated conversation history from the AI system
+            # instead of manually tracking the conversation
             
             # Save important interactions to long term
             if image is not None or "polyp" in message.lower():
+                interaction = {
+                    "query": message,
+                    "response": final_response,
+                    "has_image": image is not None,
+                    "analysis": analysis_result,
+                    "polyp_count": analysis_result.get("polyp_count", 0) if analysis_result else 0
+                }
                 self.memory.save_to_long_term(user_id, session_id, interaction)
             
             # Update chat history
@@ -335,32 +467,32 @@ class MedicalAIChatbot:
             
         except Exception as e:
             logger.error(f"Error processing message: {str(e)}")
-            error_response = f"❌ Xin lỗi, có lỗi xảy ra: {str(e)}"
+            error_response = f"❌ Sorry, an error occurred: {str(e)}"
             chat_history.append([message, error_response])
             return "", chat_history, session_state
     
     def get_user_stats(self, username: str) -> str:
-        """Lấy thống kê của user."""
+        """Get user statistics."""
         user_id = self.generate_user_id(username)
         history = self.memory.get_user_history(user_id, 10)
         
         if not history:
-            return "📊 **Thống kê của bạn:**\n- Chưa có lịch sử sử dụng"
+            return "📊 **Your Statistics:**\n- No usage history available"
         
         total_scans = len(history)
         total_polyps = sum(h["polyp_count"] for h in history)
         
         stats = [
-            "📊 **Thống kê của bạn:**",
-            f"- Tổng số lần kiểm tra: {total_scans}",
-            f"- Tổng số polyp phát hiện: {total_polyps}",
-            f"- Lần kiểm tra gần nhất: {history[0]['timestamp'][:10] if history else 'N/A'}"
+            "📊 **Your Statistics:**",
+            f"- Total scans: {total_scans}",
+            f"- Total polyps detected: {total_polyps}",
+            f"- Last scan: {history[0]['timestamp'][:10] if history else 'N/A'}"
         ]
         
         return "\n".join(stats)
     
     def create_interface(self) -> gr.Blocks:
-        """Tạo giao diện Gradio với hiển thị ảnh đã được fix."""
+        """Create Gradio interface with fixed image display."""
         
         with gr.Blocks(
             title="Medical AI Assistant", 
@@ -369,7 +501,7 @@ class MedicalAIChatbot:
             .main-container { max-width: 1200px; margin: 0 auto; }
             .chat-container { height: 600px; }
             .upload-container { border: 2px dashed #ccc; padding: 20px; text-align: center; }
-            /* Đảm bảo ảnh hiển thị đúng trong chat */
+            /* Ensure images display correctly in chat */
             .message img {
                 max-width: 100%;
                 height: auto;
@@ -385,20 +517,20 @@ class MedicalAIChatbot:
             
             gr.Markdown("""
             # 🏥 Medical AI Assistant
-            ### Hệ thống AI hỗ trợ phân tích hình ảnh nội soi và tư vấn y tế
+            ### AI system for endoscopy image analysis and medical consultation
             
-            **Hướng dẫn sử dụng:**
-            1. Nhập tên của bạn để hệ thống có thể ghi nhớ
-            2. Tải lên hình ảnh nội soi (nếu có)
-            3. Đặt câu hỏi hoặc yêu cầu phân tích
-            4. Xem kết quả và khuyến nghị từ AI
+            **Usage Guide:**
+            1. Enter your name so the system can remember you
+            2. Upload an endoscopy image (if available)
+            3. Ask questions or request analysis
+            4. Review results and recommendations from the AI
             """)
             
             with gr.Row():
                 with gr.Column(scale=2):
                     # Chat interface - FIXED: Enable HTML rendering
                     chatbot = gr.Chatbot(
-                        label="💬 Cuộc trò chuyện với AI",
+                        label="💬 Conversation with AI",
                         height=500,
                         show_copy_button=True,
                         elem_classes=["chat-container"],
@@ -409,47 +541,47 @@ class MedicalAIChatbot:
                     
                     with gr.Row():
                         msg_input = gr.Textbox(
-                            placeholder="💭 Hãy mô tả triệu chứng hoặc đặt câu hỏi về hình ảnh...",
-                            label="Tin nhắc của bạn",
+                            placeholder="💭 Describe symptoms or ask questions about the image...",
+                            label="Your message",
                             scale=4,
                             lines=2
                         )
-                        send_btn = gr.Button("📤 Gửi", variant="primary", scale=1)
+                        send_btn = gr.Button("📤 Send", variant="primary", scale=1)
                     
                     # Image upload
                     image_input = gr.Image(
-                        label="🖼️ Tải lên hình ảnh nội soi",
+                        label="🖼️ Upload endoscopy image",
                         type="filepath",
                         elem_classes=["upload-container"]
                     )
                 
                 with gr.Column(scale=1):
                     # User info panel
-                    gr.Markdown("### 👤 Thông tin người dùng")
+                    gr.Markdown("### 👤 User Information")
                     username_input = gr.Textbox(
-                        label="Tên của bạn",
-                        placeholder="Nhập tên để hệ thống ghi nhớ...",
+                        label="Your name",
+                        placeholder="Enter your name for the system to remember...",
                         value="Guest"
                     )
                     
-                    stats_display = gr.Markdown("📊 Chưa có thống kê")
+                    stats_display = gr.Markdown("📊 No statistics available")
                     
-                    stats_btn = gr.Button("Xem thống kê của tôi", variant="secondary")
+                    stats_btn = gr.Button("View my statistics", variant="secondary")
                     
                     # Quick actions
-                    gr.Markdown("### ⚡ Thao tác nhanh")
+                    gr.Markdown("### ⚡ Quick Actions")
                     
                     with gr.Column():
-                        quick_analysis_btn = gr.Button("🔍 Phân tích nhanh", size="sm")
-                        history_btn = gr.Button("📜 Xem lịch sử", size="sm") 
-                        clear_btn = gr.Button("🗑️ Xóa cuộc trò chuyện", size="sm")
+                        quick_analysis_btn = gr.Button("🔍 Quick Analysis", size="sm")
+                        history_btn = gr.Button("📜 View History", size="sm") 
+                        clear_btn = gr.Button("🗑️ Clear Conversation", size="sm")
                     
                     # Memory info
                     gr.Markdown("""
-                    ### 🧠 Trí nhớ AI
-                    - **Ngắn hạn**: Nhớ 10 tin nhắn gần nhất
-                    - **Dài hạn**: Lưu trữ kết quả quan trọng
-                    - **Cá nhân hóa**: Ghi nhớ lịch sử của bạn
+                    ### 🧠 AI Memory
+                    - **Short-term**: Remembers last 10 messages
+                    - **Long-term**: Stores important results
+                    - **Personalization**: Remembers your history
                     """)
             
             # Event handlers
@@ -463,7 +595,7 @@ class MedicalAIChatbot:
                 return []
             
             def quick_analysis_prompt():
-                return "Hãy phân tích hình ảnh này và cho tôi biết có phát hiện polyp không?"
+                return "Please analyze this image and tell me if there are any polyps detected?"
             
             # Connect events
             send_btn.click(

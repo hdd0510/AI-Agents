@@ -8,7 +8,7 @@ import os
 import sys
 import json
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from medical_ai_agents.config import MedicalGraphConfig
 from medical_ai_agents.graph.pipeline import create_medical_ai_graph
@@ -28,7 +28,8 @@ class EnhancedMedicalAISystem:
     def analyze(self, 
                image_path: Optional[str] = None,
                query: Optional[str] = None, 
-               medical_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+               medical_context: Optional[Dict[str, Any]] = None,
+               conversation_history: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
         analyze với multi-task execution support.
         
@@ -36,6 +37,7 @@ class EnhancedMedicalAISystem:
             image_path: Optional path to the image file
             query: Optional question or request  
             medical_context: Optional medical context information
+            conversation_history: Optional list of previous conversation interactions
             
         Returns:
             Dict with analysis results including multi-task info
@@ -54,18 +56,82 @@ class EnhancedMedicalAISystem:
                 "success": False
             }
         
+        # Check query validity and provide default if needed
+        if query and not isinstance(query, str):
+            self.logger.warning(f"Query is not a string: {type(query)}, converting to string")
+            query = str(query)  # Convert to string if not already
+        
         # Create initial state
         from medical_ai_agents.config import SystemState
         import uuid
         import time
         
+        # Use provided conversation history or initialize empty list
+        history = conversation_history or []
+        
+        # Create a persistent session_id early so we can use it
+        session_id = str(uuid.uuid4())
+        if history and len(history) > 0:
+            # Try to reuse the session_id from conversation history if available
+            session_entry = next((entry for entry in history if "session_id" in entry), None)
+            if session_entry:
+                session_id = session_entry.get("session_id", session_id)
+                self.logger.info(f"Reusing existing session ID: {session_id}")
+            else:
+                self.logger.info(f"Created new session ID: {session_id}")
+        else:
+            self.logger.info(f"No history found, using new session ID: {session_id}")
+            
+        # Debug information about conversation history
+        self.logger.info(f"Conversation history received: {len(history)} entries")
+        if history and len(history) > 0:
+            self.logger.info(f"Last conversation entry: {history[-1].get('query', 'No query')} - {history[-1].get('timestamp', 'No timestamp')}")
+        else:
+            # Initialize with system welcome message if this is a brand new conversation
+            self.logger.info("Initializing new conversation with system welcome message")
+            history = [{
+                "query": "",  # Empty query because this isn't a user question
+                "response": "Hello! I'm your Medical AI Assistant specializing in healthcare consultation. How can I assist you with your medical questions today?",
+                "timestamp": time.time(),
+                "is_system": True,  # Clearly mark as system message
+                "type": "init",  # Add a type to identify this as initialization
+                "session_id": session_id  # Add session_id to the initial system message
+            }]
+            self.logger.info("System welcome message added to history")
+            
+        # For debugging purposes, temporarily append the current query but without a response
+        # This helps us track the query flow through the system
+        if query:  # Only add if there's an actual query
+            # Clean up any previous pending entries to avoid duplicates
+            history = [entry for entry in history if not entry.get("is_pending", False)]
+            
+            # Add the pending entry for current query
+            debug_entry = {
+                "query": query,
+                "response": "[PENDING RESPONSE]",
+                "timestamp": time.time(),
+                "is_pending": True,  # Marked as pending so we know it's temporary
+                "session_id": session_id  # Make sure to include session_id here
+            }
+            history.append(debug_entry)
+            self.logger.info(f"Added current query to history for debugging: {query[:30]}...")
+            self.logger.debug(f"History now has {len(history)} entries with pending entry")
+            
+            # IMPORTANT: Also track the raw query in the state for better tracking
+            # This ensures we have the query in multiple places for redundancy
+            initial_state_query = query  # Store query for initial state
+        else:
+            initial_state_query = ""  # Empty string if no query
+        
         initial_state: SystemState = {
             "image_path": image_path or "",
-            "query": query,
+            "query": initial_state_query,  # Use the stored query variable
+            "raw_query": query,  # Add raw query for redundancy
             "medical_context": medical_context,
-            "session_id": str(uuid.uuid4()),
+            "session_id": session_id,
             "start_time": time.time(),
             "is_text_only": image_path is None,
+            "conversation_history": history,
             
             # Multi-task initialization
             "required_tasks": [],
@@ -105,6 +171,9 @@ class EnhancedMedicalAISystem:
             if "final_result" in final_state and final_state["final_result"]:
                 final_result = final_state["final_result"]
                 
+                # Add updated conversation history to the result
+                final_result["conversation_history"] = final_state.get("conversation_history", [])
+                
                 # Thêm final_answer để app.py có thể sử dụng
                 if "response" in final_result and final_result["response"]:
                     final_result["final_answer"] = final_result["response"]
@@ -127,6 +196,7 @@ class EnhancedMedicalAISystem:
                     "query": final_state.get("query", ""),
                     "is_text_only": final_state.get("is_text_only", False),
                     "processing_time": time.time() - initial_state["start_time"],
+                    "conversation_history": final_state.get("conversation_history", []),
                     
                     # Multi-task fallback info
                     "multi_task_analysis": {

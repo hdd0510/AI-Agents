@@ -232,15 +232,20 @@ def create_enhanced_chatbot():
             """SIMPLIFIED streaming version - cleaned up logic."""
             import uuid
             
-            # Generate session and user IDs
-            session_id = session_state.get("session_id", str(uuid.uuid4()))
+            # Generate session and user IDs first thing
+            session_id = session_state.get("session_id")
+            if not session_id:
+                session_id = str(uuid.uuid4())
+                session_state["session_id"] = session_id
+                logger.info(f"Created new session ID: {session_id}")
+            else:
+                logger.info(f"Using existing session ID: {session_id}")
+                
             user_id = self.generate_user_id(username)
-            
-            session_state["session_id"] = session_id
             session_state["user_id"] = user_id
             
             # Start with user message
-            history.append([message, "🤔 Đang phân tích..."])
+            history.append([message, "🤔 Analyzing..."])
             yield "", history, session_state
             
             try:
@@ -258,7 +263,7 @@ def create_enhanced_chatbot():
                     image_path = self._save_image_to_temp(image)
                     
                     # Update status during processing
-                    history[-1][1] = "🔍 Đang phân tích hình ảnh..."
+                    history[-1][1] = "🔍 Analyzing image..."
                     yield "", history, session_state
                     time.sleep(0.3)
                     
@@ -274,94 +279,118 @@ def create_enhanced_chatbot():
                     logger.debug(f"Image analysis result: success={result.get('success', False)}")
                     
                     if result.get("success", False):
-                        # Update status again
-                        history[-1][1] = "🔍 Đang tạo phân tích chi tiết..."
-                        yield "", history, session_state
-                        time.sleep(0.4)
-
-                        # Check if visualization is available
-                        if "final_result" in result and "agent_results" in result["final_result"]:
-                            agent_results = result["final_result"]["agent_results"]
-                            if "detector_result" in agent_results and agent_results["detector_result"].get("visualization_base64"):
-                                # Save visualization for later viewing
-                                viz_data = agent_results["detector_result"]["visualization_base64"]
-                                viz_path = self._save_visualization(viz_data, f"viz_{session_id}.jpg")
-                                session_state["viz_image_path"] = viz_path
-                                session_state["last_result_image_data"] = viz_data
+                        # Only handle polyp detection if it was done
+                        if "polyps" in result:
+                            polyp_count = len(result.get("polyps", []))
+                            
+                            # Add detection info to the response message
+                            if polyp_count > 0:
+                                response_parts = []
+                                response_parts.append("🔍 **Detection Results:**")
+                                response_parts.append(f"- Found {polyp_count} polyp(s)")
+                                
+                                # Get confidence of first polyp
+                                if result["polyps"] and "confidence" in result["polyps"][0]:
+                                    confidence = result["polyps"][0]["confidence"]
+                                    response_parts.append(f"- Confidence: {confidence:.1%}")
+                                
+                                # Check if visualization is available
+                                if "detector_result" in result.get("agent_results", {}) and result["agent_results"].get("detector", {}).get("visualization_base64"):
+                                    # Save visualization to temp file
+                                    viz_base64 = result["agent_results"]["detector"]["visualization_base64"]
+                                    
+                                    # Generate a unique filename for this visualization
+                                    viz_filename = f"polyp_viz_{session_state.get('session_id', 'unknown')}_{int(time.time())}.png"
+                                    viz_path = self._save_visualization(viz_base64, viz_filename)
+                                    
+                                    # Add to session state
+                                    session_state["last_visualization"] = viz_path
+                                    session_state["has_visualization"] = True
+                                    
+                                    # Display directly in message using HTML
+                                    # Create data URL
+                                    img_data_url = f"data:image/png;base64,{viz_base64}"
+                                    response_parts.append("\n\n📊 **Polyp Detection Results:**")
+                                    response_parts.append(f'<img src="{img_data_url}" alt="Polyp Detection Results" style="max-width: 100%; height: auto; border-radius: 8px; margin: 10px 0;">')
+                            else:
+                                response_parts.append("🔍 **No polyps detected in this image.**")
+                                response_parts.append("Regular screening is still recommended as a preventive measure.")
+                        
+                        # If final answer is available, add it
+                        if "final_answer" in result:
+                            # Add detection results first if available
+                            if "medical_context" in result:
+                                context_parts = []
+                                mc = result["medical_context"]
+                                
+                                if "imaging_type" in mc:
+                                    context_parts.append(f"- Imaging technique: {mc['imaging_type']}")
+                                
+                                if "anatomical_region" in mc:
+                                    context_parts.append(f"- Anatomical region: {mc['anatomical_region']}")
+                                
+                                if context_parts:
+                                    response_parts.append("\n💭 **Image Analysis:**")
+                                    response_parts.extend(context_parts)
+                            
+                            # Add LLM answer
+                            response_parts.append("\n💬 **Medical AI Assessment:**")
+                            response_parts.append(result["final_answer"])
+                        
+                        # Add medical recommendations
+                        if "polyps" in result and len(result.get("polyps", [])) > 0:
+                            response_parts.append("\n💡 **Medical Recommendations:**")
+                            response_parts.append("- Consult with a gastroenterologist for clinical correlation")
+                            response_parts.append("- Follow-up may be needed based on polyp characteristics")
+                            response_parts.append("- Regular screening is important for early detection")
+                        elif "vqa_answer" in result:
+                            response_parts.append("\n💡 **Additional Information:**")
+                            response_parts.append("- This analysis is provided for informational purposes only")
+                            response_parts.append("- For specific medical advice, please consult a healthcare provider")
+                        
+                        # Update conversation history in session state
+                        if "conversation_history" in result:
+                            session_state["conversation_history"] = result["conversation_history"]
+                            logger.info(f"[APP] Updated session with conversation_history: {len(result['conversation_history'])} entries")
+                            if result["conversation_history"]:
+                                last_entry = result["conversation_history"][-1]
+                                logger.info(f"[APP] Last entry query: {last_entry.get('query', 'Unknown')[:30]}...")
+                                logger.info(f"[APP] Last entry response: {last_entry.get('response', 'Unknown')[:30]}...")
                         
                         # Generate streaming response for image mode - start with a header
                         streaming_text = "🔬 **Medical Image Analysis**\n\n"
-
-                        if "final_answer" in result:
-                            final_answer = result["final_answer"]
-                            
-                            # Add context if available
-                            if context:
-                                streaming_text += "💭 **Previously recorded information:**\n"
-                                streaming_text += (context[:200] + "..." if len(context) > 200 else context) + "\n\n"
-                            
-                            # Check if streaming is natively available
-                            if "final_answer_raw" in result and result.get("streaming_enabled", False):
-                                # Use advanced streaming - more granular word-by-word streaming for smoother experience
-                                raw_answer = result["final_answer_raw"]
-                                words = raw_answer.split()
-                                streaming_text += "📋 **Analysis results:** \n\n"
-                                
-                                for i, word in enumerate(words):
-                                    streaming_text += word + " "
-                                    if i % 2 == 0:  # Update every 2 words for smoother streaming
-                                        history[-1][1] = streaming_text
-                                        yield "", history, session_state
-                                        time.sleep(0.03)  # Faster timing for smoother experience
-                            else:
-                                # Fallback to manual sentence-by-sentence streaming
-                                sentences = final_answer.replace("🏥 **Medical Analysis:**", "").split(". ")
-                                streaming_text += "📋 **Analysis results:** \n\n"
-                                
-                                for i, sentence in enumerate(sentences):
-                                    if i < len(sentences) - 1:
-                                        streaming_text += sentence + ". "
-                                    else:
-                                        streaming_text += sentence
-                                    
-                                    history[-1][1] = streaming_text
-                                    yield "", history, session_state
-                                    time.sleep(0.1)
-                            
-                            # Add final details with poly count and tools used
-                            if "final_result" in result and "agent_results" in result["final_result"] and "detector_result" in result["final_result"]["agent_results"]:
-                                detector = result["final_result"]["agent_results"]["detector_result"]
-                                polyp_count = detector.get("count", 0)
-                                if polyp_count > 0:
-                                    streaming_text += f"\n\n🔍 **Detected {polyp_count} suspicious area{'s' if polyp_count > 1 else ''}**"
-                                    streaming_text += "\n💡 A medical professional should review these findings"
-                                    if "viz_image_path" in session_state:
-                                        streaming_text += "\n👁️ Click 'View Results' to see visualized analysis"
-                            
-                            # Record polyp count in state for memory
-                            polyp_count = 0
-                            if "final_result" in result and "agent_results" in result["final_result"] and "detector_result" in result["final_result"]["agent_results"]:
-                                polyp_count = result["final_result"]["agent_results"]["detector_result"].get("count", 0)
-                            session_state["polyp_count"] = polyp_count
-                            
-                            history[-1][1] = streaming_text
-                            yield "", history, session_state
-                        else:
-                            # Fallback for missing final answer
-                            fallback_response = "⚠️ Không tạo được phân tích hoàn chỉnh. Vui lòng thử lại."
-                            history[-1][1] = fallback_response
-                            yield "", history, session_state
+                        
+                        # Add final details with poly count and tools used
+                        if "final_result" in result and "agent_results" in result["final_result"] and "detector_result" in result["final_result"]["agent_results"]:
+                            detector = result["final_result"]["agent_results"]["detector_result"]
+                            polyp_count = detector.get("count", 0)
+                            if polyp_count > 0:
+                                streaming_text += f"\n\n🔍 **Detected {polyp_count} suspicious area{'s' if polyp_count > 1 else ''}**"
+                                streaming_text += "\n💡 A medical professional should review these findings"
+                                if "viz_image_path" in session_state:
+                                    streaming_text += "\n👁️ Click 'View Results' to see visualized analysis"
+                        
+                        # Record polyp count in state for memory
+                        polyp_count = 0
+                        if "final_result" in result and "agent_results" in result["final_result"] and "detector_result" in result["final_result"]["agent_results"]:
+                            polyp_count = result["final_result"]["agent_results"]["detector_result"].get("count", 0)
+                        session_state["polyp_count"] = polyp_count
+                        
+                        streaming_text += "\n\n" + "\n".join(response_parts)
+                        history[-1][1] = streaming_text
+                        yield "", history, session_state
                     else:
-                        # Handle system error
-                        logger.error(f"Medical AI system failed: {result.get('error', 'Unknown error')}")
-                        error_response = f"❌ Xin lỗi, không thể phân tích hình ảnh: {result.get('error', 'Unknown error')}"
-                        history[-1][1] = error_response
+                        error_msg = result.get("error", "Unknown error")
+                        response_parts = []
+                        response_parts.append(f"❌ Error analyzing the image: {error_msg}")
+                        response_parts.append("Please try again or upload a different image.")
+                        history[-1][1] = "\n".join(response_parts)
                         yield "", history, session_state
                 else:
                     # =============  TEXT-ONLY WORKFLOW (SIMPLIFIED) =============
                     logger.info(f"Processing text-only query: '{message[:50]}...'")
                     
-                    history[-1][1] = "🧠 Đang tư vấn qua LLaVA..."
+                    history[-1][1] = "🧠 Consulting via LLaVA..."
                     yield "", history, session_state
                     time.sleep(0.3)
                     
@@ -379,7 +408,7 @@ def create_enhanced_chatbot():
                     
                     if result.get("success", False):
                         # Stream LLaVA text-only response
-                        history[-1][1] = "📝 Đang tạo tư vấn..."
+                        history[-1][1] = "📝 Preparing response..."
                         yield "", history, session_state
                         time.sleep(0.3)
                         
@@ -391,11 +420,11 @@ def create_enhanced_chatbot():
                             
                             if not vqa_success:
                                 # VQA/LLaVA failed - show safety error
-                                error_response = "❌ **Hệ thống tư vấn y tế gặp sự cố**\n\n"
-                                error_response += vqa_result.get("answer", "Lỗi không xác định trong quá trình tư vấn.")
-                                error_response += "\n\n🔄 **Vui lòng:**\n"
-                                error_response += "- Thử lại sau vài phút\n"
-                                error_response += "- Hoặc tham khảo bác sĩ trực tiếp nếu cần thiết"
+                                error_response = "❌ **Medical advisory system unavailable**\n\n"
+                                error_response += vqa_result.get("answer", "An undefined error occurred during consultation.")
+                                error_response += "\n\n🔄 **Please:**\n"
+                                error_response += "- Try again in a few minutes\n"
+                                error_response += "- Or consult a physician directly if needed"
                                 
                                 history[-1][1] = error_response
                                 yield "", history, session_state
@@ -403,49 +432,42 @@ def create_enhanced_chatbot():
                         
                         # VQA succeeded - process response
                         if vqa_success and "final_answer" in result:
-                            streaming_text = "🧠 **Tư vấn y tế qua LLaVA:**\n\n"
+                            streaming_text = ""
                             
                             # Add context if available
                             if context:
-                                streaming_text += "💭 **Dựa trên thông tin trước đó:**\n"
+                                streaming_text += "💭 **Based on previous information:**\n"
                                 streaming_text += (context[:200] + "..." if len(context) > 200 else context) + "\n\n"
                             
-                            # Check if streaming is natively available
-                            has_streaming = False
-                            if "final_result" in result and "final_answer_raw" in result["final_result"] and result["final_result"].get("streaming_enabled", False):
-                                has_streaming = True
-                                # Use advanced character-by-character streaming for text consultations
-                                raw_answer = result["final_result"]["final_answer_raw"]
-                                words = raw_answer.split()
-                                for i, word in enumerate(words):
-                                    streaming_text += word + " "
-                                    if i % 1 == 0:  # Update every word for smoother streaming
-                                        history[-1][1] = streaming_text
-                                        yield "", history, session_state
-                                        time.sleep(0.02)  # Very fast timing for natural typing effect
+                            streaming_text += "💬 **Medical AI Response:**\n"
+                            streaming_text += result["final_answer"]
                             
-                            if not has_streaming:
-                                # Fallback to traditional word-by-word streaming
-                                final_answer = result["final_answer"]
-                                words = final_answer.replace("🏥 **Medical Analysis:**", "").split()
-                                for i, word in enumerate(words):
-                                    streaming_text += word + " "
-                                    if i % 3 == 0:  # Update every 3 words for smoother streaming
-                                        history[-1][1] = streaming_text
-                                        yield "", history, session_state
-                                        time.sleep(0.05)
+                            # Add processed by note
+                            streaming_text += "\n\n🔬 **Processed by:** LLaVA-Med (Medical LLM)"
                             
-                            # Add LLaVA processing info
-                            streaming_text += f"\n\n🔬 **Được xử lý bởi:** LLaVA-Med (Text-Only Mode)"
-                            streaming_text += f"\n📊 **Loại tư vấn:** Medical consultation without image"
-                            
-                            history[-1][1] = streaming_text.strip()
+                            history[-1][1] = streaming_text
                             yield "", history, session_state
                             
+                            # Update conversation history in session state
+                            if "conversation_history" in result:
+                                session_state["conversation_history"] = result["conversation_history"]
+                                logger.info(f"[APP] Updated session with conversation_history: {len(result['conversation_history'])} entries")
+                        
                         else:
-                            # Fallback handling with safety checks
-                            fallback_response = self._create_safe_fallback_response(result, context, message)
-                            history[-1][1] = fallback_response
+                            # Fallback for no final answer
+                            streaming_text = ""
+                            if context:
+                                streaming_text += "💭 **Based on previous information:**\n"
+                                streaming_text += (context[:200] + "..." if len(context) > 200 else context) + "\n\n"
+                            
+                            streaming_text += "❌ **An error occurred during response generation**\n\n"
+                            streaming_text += "I apologize for the inconvenience. The Medical AI system encountered difficulty processing your query.\n\n"
+                            streaming_text += "Please try again with:\n"
+                            streaming_text += "- A more specific question\n"
+                            streaming_text += "- Different phrasing\n"
+                            streaming_text += "- Or try uploading an image for visual analysis"
+                            
+                            history[-1][1] = streaming_text
                             yield "", history, session_state
                     
                     else:
@@ -465,77 +487,77 @@ def create_enhanced_chatbot():
                     if "detector_result" in agent_results:
                         polyp_count = agent_results["detector_result"].get("count", 0)
                 
+                # Create complete interaction record
                 interaction = {
                     "query": message,
                     "response": final_response,
                     "has_image": has_image,
                     "analysis": result if 'result' in locals() else None,
                     "polyp_count": polyp_count,
-                    "is_text_only": not has_image
+                    "is_text_only": not has_image,
+                    "timestamp": time.time(),
+                    "session_id": session_id  # Ensure session_id is included
                 }
                 
                 logger.debug(f"Saving interaction to memory: query='{message[:30]}...', has_image={has_image}")
                 self.memory.add_to_short_term(session_id, interaction)
                 
                 # Save important interactions to long term
-                if has_image or "polyp" in message.lower() or "y tế" in message.lower():
+                if has_image or "polyp" in message.lower() or "medical" in message.lower():
                     logger.info(f"Saving important interaction to long-term memory for user {user_id}")
                     self.memory.save_to_long_term(user_id, session_id, interaction)
                 
+                # Update session state if needed
+                if "is_fake_streaming_done" not in result or result["is_fake_streaming_done"]:
+                    # Process final response
+                    if isinstance(result, dict) and "final_answer" in result:
+                        # Extract final answer
+                        final_response = result["final_answer"]
+                        
+                        # Update conversation history in session state
+                        if "conversation_history" in result:
+                            session_state["conversation_history"] = result["conversation_history"]
+                            logger.info(f"[APP] Updated session state with conversation_history: {len(result['conversation_history'])} entries")
+                            if result["conversation_history"]:
+                                last_entry = result["conversation_history"][-1]
+                                logger.info(f"[APP] Last entry: {last_entry.get('query', 'Unknown')[:30]}... - {last_entry.get('response', 'Unknown')[:30]}...")
+                        else:
+                            # If no conversation history in result, create one from current interaction
+                            if "conversation_history" not in session_state:
+                                session_state["conversation_history"] = []
+                            
+                            # Add the current interaction to conversation history
+                            user_interaction = {
+                                "query": message,
+                                "response": final_response,
+                                "timestamp": time.time(),
+                                "session_id": session_id,
+                                "is_system": False  # Mark as user interaction
+                            }
+                            session_state["conversation_history"].append(user_interaction)
+                            logger.info(f"[APP] Created new conversation history entry for query: {message[:30]}")
+                        
+                        # Other updates from response
+                        if "session_id" in result:
+                            session_state["session_id"] = result["session_id"]
+                
             except Exception as e:
-                logger.error(f"Error in process_message_streaming: {str(e)}", exc_info=True)
-                error_response = f"❌ Xin lỗi, có lỗi hệ thống xảy ra: {str(e)}"
+                import traceback
+                logger.error(f"Error processing message: {str(e)}")
+                logger.error(traceback.format_exc())
+                error_response = self._create_system_error_response(message)
                 history[-1][1] = error_response
                 yield "", history, session_state
         
-        def _create_safe_fallback_response(self, result, context, message):
-            """Create safe fallback response for text-only queries."""
-            fallback_response = "🧠 **Tư vấn y tế:**\n\n"
-            
-            # Check for VQA result first
-            if "agent_results" in result and "vqa_result" in result["agent_results"]:
-                vqa_result = result["agent_results"]["vqa_result"]
-                if vqa_result.get("success", False):
-                    llava_answer = vqa_result.get("answer", "")
-                    if llava_answer and len(llava_answer.strip()) > 20:
-                        fallback_response += llava_answer
-                        if context:
-                            fallback_response = f"💭 **Dựa trên thông tin trước đó:**\n{context[:200]}...\n\n" + fallback_response
-                        
-                        fallback_response += f"\n\n🔬 **Được xử lý bởi:** LLaVA-Med (Text-Only Mode)"
-                        return fallback_response
-            
-            # Generic helpful response
-            if context:
-                fallback_response += f"💭 **Dựa trên thông tin trước đó:**\n{context[:200]}...\n\n"
-            
-            # Customize based on message content
-            if any(greeting in message.lower() for greeting in ["hello", "hi", "xin chào", "chào"]):
-                fallback_response += "Xin chào! Tôi là trợ lý AI y tế chuyên hỗ trợ phân tích hình ảnh nội soi.\n\n"
-                fallback_response += "🔬 **Tôi có thể giúp bạn:**\n"
-                fallback_response += "- Phân tích hình ảnh nội soi đại tràng\n"
-                fallback_response += "- Phát hiện polyp và các bất thường\n"
-                fallback_response += "- Trả lời câu hỏi về y tế tiêu hóa\n\n"
-                fallback_response += "Bạn có thể tải lên hình ảnh nội soi hoặc đặt câu hỏi cụ thể để tôi hỗ trợ tốt hơn."
-            else:
-                fallback_response += "Cảm ơn bạn đã đưa ra câu hỏi. Để tôi có thể hỗ trợ tốt nhất:\n\n"
-                fallback_response += "📋 **Khuyến nghị:**\n"
-                fallback_response += "1. Mô tả chi tiết hơn về triệu chứng bạn gặp phải\n"
-                fallback_response += "2. Tải lên hình ảnh nội soi nếu có\n"
-                fallback_response += "3. Đặt câu hỏi cụ thể về vấn đề sức khỏe\n\n"
-                fallback_response += "🏥 **Lưu ý:** Tôi là trợ lý AI hỗ trợ, không thay thế khám bác sĩ."
-            
-            return fallback_response
-        
         def _create_system_error_response(self, message):
             """Create system error response with helpful guidance."""
-            error_response = "❌ **Hệ thống tạm thời gặp sự cố**\n\n"
-            error_response += "Xin lỗi vì sự bất tiện này. Hệ thống LLaVA hiện không thể xử lý yêu cầu của bạn.\n\n"
-            error_response += "🔄 **Bạn có thể:**\n"
-            error_response += "- Thử lại sau vài phút\n"
-            error_response += "- Đặt lại câu hỏi với từ ngữ khác\n"
-            error_response += "- Tải lên hình ảnh để phân tích trực quan\n\n"
-            error_response += "🏥 **Nếu cần tư vấn gấp:** Vui lòng liên hệ bác sĩ chuyên khoa trực tiếp."
+            error_response = "❌ **System temporarily unavailable**\n\n"
+            error_response += "I apologize for the inconvenience. The LLaVA system is currently unable to process your request.\n\n"
+            error_response += "🔄 **You can try:**\n"
+            error_response += "- Trying again in a few minutes\n"
+            error_response += "- Rephrasing your question\n"
+            error_response += "- Uploading an image for visual analysis\n\n"
+            error_response += "🏥 **For urgent consultation:** Please contact a medical specialist directly."
             return error_response
 
         def create_enhanced_interface(self):
@@ -621,13 +643,13 @@ def create_enhanced_chatbot():
                 with gr.Row(elem_classes=["header-section"]):
                     gr.Markdown(f"""
                     # 🏥 {self.app_config.get("app.title", "Medical AI Assistant")}
-                    ### {self.app_config.get("app.description", "Hệ thống AI hỗ trợ phân tích hình ảnh nội soi")}
+                    ### {self.app_config.get("app.description", "AI system for endoscopy image analysis and medical consultation")}
                     
-                    **🎯 Tính năng nổi bật:**
-                    - 🧠 **LLaVA-Med Integration**: Sử dụng AI chuyên về y tế
-                    - 🔍 **Phân tích chính xác**: AI đa agent với độ tin cậy cao
-                    - 💬 **Tư vấn thông minh**: Hỗ trợ cả hình ảnh và text-only
-                    - 📊 **Streaming response**: Phản hồi real-time
+                    **🎯 Key Features:**
+                    - 🧠 **LLaVA-Med Integration**: Specialized medical AI
+                    - 🔍 **Accurate Analysis**: Multi-agent AI with high reliability
+                    - 💬 **Intelligent Consultation**: Support for both images and text-only queries
+                    - 📊 **Streaming Response**: Real-time feedback
                     """)
                 
                 with gr.Row():
@@ -635,7 +657,7 @@ def create_enhanced_chatbot():
                     with gr.Column(scale=1, min_width=800):
                         # Chat container - FIXED: Enable HTML rendering for images
                         chatbot = gr.Chatbot(
-                            label="💬 Cuộc trò chuyện với AI",
+                            label="💬 Conversation with AI",
                             height=self.app_config.get("ui.chat_height", 650),
                             show_copy_button=True,
                             elem_classes=["chat-container"],
@@ -647,71 +669,84 @@ def create_enhanced_chatbot():
                         # Input and buttons in a clean layout
                         with gr.Row(elem_classes=["chat-input-container"]):
                             msg_input = gr.Textbox(
-                                placeholder="💭 Hãy mô tả triệu chứng hoặc đặt câu hỏi về hình ảnh...",
-                                label="Tin nhắn của bạn",
+                                placeholder="💭 Describe symptoms or ask questions about the image...",
+                                label="Your message",
                                 scale=5,
                                 lines=2
                             )
                             with gr.Column(scale=1, elem_classes=["button-row"]):
-                                send_btn = gr.Button("📤 Gửi", variant="primary", size="lg")
-                                clear_btn = gr.Button("🗑️ Xóa", variant="stop", size="lg")
+                                send_btn = gr.Button("📤 Send", variant="primary", size="lg")
+                                clear_btn = gr.Button("🗑️ Clear", variant="stop", size="lg")
                         
                         # Tabs for image upload and results
                         tabs = gr.Tabs(elem_classes=["tab-container"])
                         with tabs:
-                            with gr.TabItem("🖼️ Tải ảnh"):
+                            with gr.TabItem("🖼️ Upload Image"):
                                 # Advanced image upload
                                 image_input = gr.Image(
-                                    label="Chọn hình ảnh nội soi, X-quang hoặc hình ảnh y tế khác",
+                                    label="Select endoscopy image, X-ray, or other medical image",
                                     type="filepath",
                                     elem_classes=["upload-container"]
                                 )
                                 
                                 gr.Markdown("""
-                                **Lưu ý:** 
-                                - Hỗ trợ định dạng: JPG, PNG, DICOM
-                                - Kích thước tối đa: 10MB
-                                - Đảm bảo hình ảnh rõ nét cho kết quả tốt nhất
-                                - **Ảnh kết quả sẽ hiển thị trực tiếp trong chat**
+                                **Note:** 
+                                - Supported formats: JPG, PNG, DICOM
+                                - Maximum size: 10MB
+                                - Ensure clear images for best results
+                                - **Detection results will appear directly in chat**
                                 """)
                             
-                            with gr.TabItem("📊 Kết quả phát hiện"):
+                            with gr.TabItem("📊 Detection Results"):
                                 result_image = gr.Image(
-                                    label="Kết quả phát hiện polyp",
+                                    label="Polyp detection results",
                                     type="filepath",
                                     interactive=False
                                 )
                                 
-                                show_latest_result_btn = gr.Button("🔄 Hiển thị kết quả mới nhất", variant="secondary")
+                                show_latest_result_btn = gr.Button("🔄 Show latest results", variant="secondary")
                 
                 # Hidden state for username (required for functions)
-                username_input = gr.Textbox(value="Bệnh nhân", visible=False)
+                username_input = gr.Textbox(value="Patient", visible=False)
                 user_info = gr.Textbox(value="", visible=False)
                 
-                # FIXED: Event handlers với streaming support
+                # Streaming format wrapper
+                streaming_format = gr.Markdown(value="", elem_id="streaming_output") 
+                
                 def safe_process_message_streaming(message, image, history, username, user_info, state):
-                    """Wrapper cho streaming function."""
+                    """Safe wrapper for process_message with streaming."""
+                    start_time = time.time()
+                    
+                    # Log the current state
+                    logger.info(f"[APP] Processing message from {username}: '{message[:50]}...' (if longer)")
+                    
+                    # Debug session state
+                    if "conversation_history" in state:
+                        logger.info(f"[APP] Current session state has conversation_history with {len(state['conversation_history'])} entries")
+                        if len(state['conversation_history']) > 0:
+                            last_entry = state['conversation_history'][-1]
+                            logger.info(f"[APP] Last entry: {last_entry.get('query', 'Unknown')[:30]}... - {last_entry.get('timestamp', 'No timestamp')}")
+                    else:
+                        logger.info("[APP] No conversation_history in session state yet")
+                        
+                    # Process the message
                     try:
-                        # Đảm bảo state luôn là dict
-                        if state is None:
-                            state = {}
-                        # Add user info to medical context
-                        if user_info.strip():
-                            if "medical_context" not in state:
-                                state["medical_context"] = {}
-                            state["medical_context"]["user_info"] = user_info
+                        # Update user info in state
+                        if "medical_context" not in state:
+                            state["medical_context"] = {}
+                        state["medical_context"]["user_info"] = user_info
                         
                         # Use streaming version
-                        for msg, hist, updated_state in self.process_message_streaming(message, image, history, username, state):
-                            yield msg, hist, updated_state, None
+                        for msg, updated_history, updated_state in self.process_message_streaming(message, image, history, username, state):
+                            yield msg, updated_history, updated_state, None
                         
                         # Check for visualization result
-                        if "last_result_image_data" in updated_state:
-                            yield msg, hist, updated_state, None
+                        if "last_visualization" in updated_state:
+                            yield msg, updated_history, updated_state, updated_state.get("last_visualization")
                             
                     except Exception as e:
                         logger.error(f"Error in safe_process_message_streaming: {str(e)}", exc_info=True)
-                        error_msg = f"❌ Lỗi xử lý: {str(e)}"
+                        error_msg = f"❌ Processing error: {str(e)}"
                         if history:
                             history[-1][1] = error_msg
                         else:
@@ -719,10 +754,10 @@ def create_enhanced_chatbot():
                         yield "", history, state, None
 
                 def show_latest_visualization(state):
-                    """Hiển thị kết quả phát hiện mới nhất từ session state"""
+                    """Show the most recent detection visualization"""
                     try:
-                        if "viz_image_path" in state and state["viz_image_path"]:
-                            return state["viz_image_path"]
+                        if "last_visualization" in state and state["last_visualization"]:
+                            return state["last_visualization"]
                         else:
                             return None
                     except Exception as e:

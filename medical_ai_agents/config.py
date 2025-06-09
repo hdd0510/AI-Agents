@@ -21,6 +21,7 @@ class TaskType(str, Enum):
     COMPREHENSIVE = "comprehensive"
     TEXT_ONLY = "text_only"
     MULTI_TASK = "multi_task"  # NEW: For combination tasks
+    GENERAL_QUERY = "general_query"  # NEW: For non-medical general queries
 
 # Keep existing TypedDict definitions...
 class DetectionResult(TypedDict, total=False):
@@ -65,6 +66,9 @@ class SystemState(TypedDict, total=False):
     completed_tasks: List[str]  # NEW: List of completed tasks
     current_task: Optional[str]  # NEW: Currently executing task
     execution_order: List[str]  # NEW: Optimal execution order
+    
+    # Conversation History
+    conversation_history: List[Dict[str, Any]]  # NEW: List of conversation interactions
     
     # Processing
     session_id: str

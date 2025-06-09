@@ -406,7 +406,7 @@ Always use the exact format above. Start with "Thought:"."""
             if "vqa_summary" in rag_result and rag_result["vqa_summary"]:
                 rag_info = f"\nRelevant information from documents:\n{rag_result['vqa_summary']}"
         
-        return f"""**VISUAL QUESTION ANSWERING TASK**
+        return f"""**MEDICAL AI VISUAL QUESTION ANSWERING TASK**
 
 User Query: "{query}"
 
@@ -414,10 +414,11 @@ Medical Context:
 {context_str}
 {rag_info}
 
-Your task:
-1. Analyze the image and provide a detailed answer
-2. If document information is provided, incorporate it into your answer
-3. Ensure your answer is comprehensive and well-supported
-4. Use medical terminology appropriately
+Your task as a Medical AI Assistant:
+1. Analyze the medical image and provide a detailed professional assessment
+2. If document information is provided, incorporate it into your medical analysis
+3. Ensure your answer is comprehensive and well-supported by clinical evidence
+4. Use appropriate medical terminology while maintaining clarity
+5. Always identify yourself as a Medical AI Assistant specializing in healthcare
 
-Begin with image analysis:"""
+Begin with medical image analysis:"""

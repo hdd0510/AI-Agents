@@ -17,27 +17,107 @@ from medical_ai_agents.config import SystemState, TaskType
 
 # Task Analyzer với Multi-Task Support
 def task_analyzer(state: SystemState, llm: ChatOpenAI) -> Dict:
-    """task analyzer với multi-task parsing support."""
+    """Analyze tasking requirements based on query and metadata."""
     logger = logging.getLogger("graph.nodes.task_analyzer")
     
-    query = state.get("query", "")
-    is_text_only = state.get("is_text_only", False)
-    uploaded_docs = state.get("uploaded_documents", [])
+    # Check for required parameters
+    if "query" not in state or state["query"] == "":
+        # Try to get raw_query as fallback
+        if "raw_query" in state and state["raw_query"]:
+            logger.info("No primary query found, using raw_query as fallback")
+            state["query"] = state["raw_query"]
+        else:
+            logger.warning("No query provided in state")
     
-    if is_text_only:
-        logger.info("Text-only mode detected")
-        return {
-            **state,
-            "task_type": TaskType.TEXT_ONLY,
-            "required_tasks": ["medical_qa"],
-            "completed_tasks": [],
-            "execution_order": ["medical_qa"]
-        }
+    query = state.get("query", "")
+    logger.info(f"Task analyzer processing query: '{query[:50]}...' (length: {len(query)})")
+    
+    # Debug query tracking for diagnosis
+    if not query and "raw_query" in state:
+        logger.warning(f"Query is empty but raw_query is: '{state['raw_query'][:50]}...'")
+    
+    # Check if we're in text-only mode
+    if state.get("is_text_only", False):
+        logger.info("Processing text-only query")
+        
+        # Extract context from conversation history
+        context = ""
+        conversation_history = state.get("conversation_history", [])
+        
+        if conversation_history:
+            # Filter out system messages and pending entries 
+            filtered_entries = [
+                entry for entry in conversation_history 
+                if not entry.get("is_system", False) and 
+                not entry.get("is_pending", False) and
+                not entry.get("is_meta", False)
+            ]
+            
+            # Get the last 2 conversations for context
+            recent_conversations = filtered_entries[-2:] if filtered_entries else []
+            
+            if recent_conversations:
+                context = "Previous conversation:\n"
+                for i, conv in enumerate(recent_conversations):
+                    context += f"User: {conv.get('query', '')}\n"
+                    context += f"System: {conv.get('response', '')[:100]}...\n\n"
+        
+        # Medical vs General classification for text-only queries
+        prompt = PromptTemplate.from_template(
+            """Analyze the following query and determine if it is directly related to medical topics:
+            
+            {context}
+            
+            Current Query: {query}
+            
+            Instructions:
+            - If the query is about medical advice, diagnosis, treatments, medical images, or healthcare → MEDICAL
+            - If the query is general conversation, non-medical topics, or not related to healthcare → GENERAL
+            
+            Respond with only one word: MEDICAL or GENERAL
+            """
+        )
+        
+        try:
+            chain = prompt | llm | StrOutputParser()
+            query_type = chain.invoke({"query": query, "context": context}).strip().upper()
+            
+            if query_type == "GENERAL":
+                logger.info("Non-medical text query detected, routing directly to synthesizer")
+                return {
+                    **state,
+                    "task_type": TaskType.TEXT_ONLY,
+                    "required_tasks": ["general_query"],
+                    "completed_tasks": [],
+                    "execution_order": ["general_query"],
+                    "is_medical_query": False
+                }
+            else:
+                logger.info("Medical text query detected, routing through VQA")
+                return {
+                    **state,
+                    "task_type": TaskType.TEXT_ONLY,
+                    "required_tasks": ["medical_qa"],
+                    "completed_tasks": [],
+                    "execution_order": ["medical_qa"],
+                    "is_medical_query": True
+                }
+        except Exception as e:
+            logger.error(f"Query classification failed: {str(e)}")
+            # Default to medical_qa on error
+            return {
+                **state,
+                "task_type": TaskType.TEXT_ONLY,
+                "required_tasks": ["medical_qa"],
+                "completed_tasks": [],
+                "execution_order": ["medical_qa"],
+                "is_medical_query": True
+            }
     
     if not query:
         logger.info("No query provided, defaulting to comprehensive analysis")
         tasks = ["polyp_detection", "modality_classification", "region_classification"]
-        if uploaded_docs:
+        if state.get("uploaded_documents", []):
             tasks.append("document_qa")
         return {
             **state,
@@ -49,30 +129,32 @@ def task_analyzer(state: SystemState, llm: ChatOpenAI) -> Dict:
     
     logger.info(f"Analyzing multi-task query: {query}")
     
-    # prompt for multi-task analysis
+    # prompt for multi-task analysis with conversation history
     prompt = PromptTemplate.from_template(
-        """Phân tích yêu cầu sau và xác định các tác vụ cần thiết để trả lời đầy đủ:
+        """Analyze the following request and determine the necessary tasks to provide a complete answer:
         
-        Yêu cầu: {query}
+        {context}
         
-        Các tác vụ có thể bao gồm (có thể chọn nhiều tác vụ):
-        - polyp_detection: Phát hiện polyp và đối tượng bất thường
-        - modality_classification: Phân loại kỹ thuật nội soi (BLI, WLI, FICE, LCI)
-        - region_classification: Phân loại vị trí giải phẫu trong đường tiêu hóa
-        - medical_qa: Trả lời câu hỏi y tế, tư vấn, giải thích
-        - document_qa: Trả lời câu hỏi liên quan đến tài liệu, tài liệu PDF
+        Current Request: {query}
         
-        Hướng dẫn:
-        - Nếu hỏi về polyp/tổn thương/phát hiện → bao gồm polyp_detection
-        - Nếu hỏi về kỹ thuật/modality/BLI/WLI → bao gồm modality_classification
-        - Nếu hỏi về vị trí/anatomy/region → bao gồm region_classification
-        - Nếu cần giải thích/tư vấn/phân tích → bao gồm medical_qa
-        - Nếu hỏi về tài liệu/PDF → bao gồm document_qa
-        - Câu hỏi phức tạp có thể cần nhiều tác vụ
+        Available tasks (multiple can be selected):
+        - polyp_detection: Detect polyps and abnormal objects
+        - modality_classification: Classify endoscopy technique (BLI, WLI, FICE, LCI)
+        - region_classification: Classify anatomical location in gastrointestinal tract
+        - medical_qa: Answer medical questions, provide consultation, explain medical concepts
+        - document_qa: Answer questions related to documents or PDF files
         
-        Trả về danh sách các tác vụ cần thiết, cách nhau bởi dấu phẩy.
-        Ví dụ: polyp_detection, medical_qa
-        Hoặc: modality_classification, region_classification, medical_qa
+        Guidelines:
+        - If asking about polyps/lesions/detection → include polyp_detection
+        - If asking about technique/modality/BLI/WLI → include modality_classification
+        - If asking about location/anatomy/region → include region_classification
+        - If explanation/consultation/analysis needed → include medical_qa
+        - If asking about documents/PDF → include document_qa
+        - Complex questions may require multiple tasks
+        
+        Return a list of necessary tasks, separated by commas.
+        Example: polyp_detection, medical_qa
+        Or: modality_classification, region_classification, medical_qa
         """
     )
     
@@ -80,7 +162,7 @@ def task_analyzer(state: SystemState, llm: ChatOpenAI) -> Dict:
     
     try:
         # Get LLM analysis
-        task_result = chain.invoke({"query": query})
+        task_result = chain.invoke({"query": query, "context": context})
         logger.info(f"LLM task analysis result: {task_result}")
         
         # Parse multiple tasks
@@ -173,20 +255,24 @@ def _keyword_based_task_analysis(query: str) -> List[str]:
     required_tasks = []
     
     # Detection keywords
-    if any(kw in query_lower for kw in ["polyp", "tổn thương", "phát hiện", "detect", " ", "abnormal", "lesion"]):
+    if any(kw in query_lower for kw in ["polyp", "lesion", "detection", "detect", "find", "abnormal", "tumor", "growth"]):
         required_tasks.append("polyp_detection")
     
     # Modality keywords
-    if any(kw in query_lower for kw in ["bli", "wli", "fice", "lci", "technique", "modality", "imaging", "kỹ thuật"]):
+    if any(kw in query_lower for kw in ["bli", "wli", "fice", "lci", "technique", "modality", "imaging", "light", "wavelength"]):
         required_tasks.append("modality_classification")
     
     # Region keywords
-    if any(kw in query_lower for kw in ["location", "region", "anatomy", "vị trí", "hang vị", "thân vị", "antrum", "fundus"]):
+    if any(kw in query_lower for kw in ["location", "region", "anatomy", "where", "position", "antrum", "fundus", "colon", "stomach"]):
         required_tasks.append("region_classification")
     
     # Medical QA keywords
-    if any(kw in query_lower for kw in ["?", "what", "how", "why", "explain", "tại sao", "như thế nào", "giải thích", "tư vấn"]):
+    if any(kw in query_lower for kw in ["?", "what", "how", "why", "explain", "reason", "consultation", "advice", "help", "symptoms"]):
         required_tasks.append("medical_qa")
+    
+    # Document QA keywords
+    if any(kw in query_lower for kw in ["document", "pdf", "file", "paper", "report", "research", "study"]):
+        required_tasks.append("document_qa")
     
     # Default to comprehensive if nothing specific
     if not required_tasks:
@@ -249,9 +335,263 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
     """Tổng hợp kết quả từ nhiều agent thành phản hồi cuối cùng."""
     logger = logging.getLogger("graph.nodes.result_synthesizer")
     
+    # --- DETAILED DEBUG LOGGING START ---
+    logger.info("=" * 50)
+    logger.info("SYNTHESIZER NODE INPUT DETAILS")
+    logger.info("=" * 50)
+    
+    # Query info
+    current_query = state.get("query", "")
+    logger.info(f"QUERY: '{current_query}'")
+    logger.info(f"IS_TEXT_ONLY: {state.get('is_text_only', False)}")
+    logger.info(f"TASK TYPE: {state.get('task_type', 'unknown')}")
+    
+    # Task info
+    required_tasks = state.get("required_tasks", [])
+    completed_tasks = state.get("completed_tasks", [])
+    execution_order = state.get("execution_order", [])
+    logger.info(f"REQUIRED TASKS: {required_tasks}")
+    logger.info(f"COMPLETED TASKS: {completed_tasks}")
+    logger.info(f"EXECUTION ORDER: {execution_order}")
+    
+    # Conversation history info
+    conversation_history = state.get("conversation_history", [])
+    
+    # Clean up pending/debug entries from conversation history
+    if conversation_history:
+        conversation_history = [entry for entry in conversation_history if not entry.get("is_pending", False)]
+        # Update the state with cleaned history
+        state["conversation_history"] = conversation_history
+        logger.info(f"Cleaned conversation history, removed pending entries. Now has {len(conversation_history)} entries.")
+    
+    logger.info(f"CONVERSATION HISTORY ENTRIES: {len(conversation_history)}")
+    if conversation_history:
+        for i, entry in enumerate(conversation_history[-3:]):  # Show last 3 entries
+            logger.info(f"HISTORY ENTRY {i}:")
+            logger.info(f"  - QUERY: {entry.get('query', 'None')[:50]}...")
+            resp = entry.get('response', 'None')
+            if resp and len(resp) > 50:
+                resp = resp[:50] + "..."
+            logger.info(f"  - RESPONSE: {resp}")
+            logger.info(f"  - TIMESTAMP: {entry.get('timestamp', 'None')}")
+            logger.info(f"  - IS_SYSTEM: {entry.get('is_system', False)}")
+    
+    # Available results
+    agent_results_keys = []
+    if "detector_result" in state:
+        agent_results_keys.append("detector_result")
+    if "modality_result" in state:
+        agent_results_keys.append("modality_result")
+    if "region_result" in state:
+        agent_results_keys.append("region_result")
+    if "vqa_result" in state:
+        agent_results_keys.append("vqa_result")
+    if "rag_result" in state:
+        agent_results_keys.append("rag_result")
+    
+    logger.info(f"AVAILABLE AGENT RESULTS: {agent_results_keys}")
+    logger.info("=" * 50)
+    # --- DETAILED DEBUG LOGGING END ---
+    
     # Calculate processing time
     start_time = state.get("start_time", time.time())
     processing_time = time.time() - start_time
+    
+    # Get conversation history
+    conversation_history = state.get("conversation_history", [])
+    current_query = state.get("query", "")
+    
+    # Debug information about conversation history
+    logger.info(f"Synthesizer received conversation history: {len(conversation_history)} entries")
+    if conversation_history:
+        logger.info(f"First history entry: {conversation_history[0].get('query', 'Unknown')[:30]}...")
+        logger.info(f"Last history entry: {conversation_history[-1].get('query', 'Unknown')[:30]}...")
+        
+        # Add detailed logging of conversation pairs
+        logger.info("=" * 50)
+        logger.info("CONVERSATION HISTORY PAIRS:")
+        print(conversation_history)
+        for i, entry in enumerate(conversation_history):
+            is_system = entry.get("is_system", False)
+            entry_type = "SYSTEM" if is_system else "USER"
+            logger.info(f"ENTRY {i} [{entry_type}]:")
+            logger.info(f"  - QUERY: {entry.get('query', 'None')[:50]}...")
+            logger.info(f"  - RESPONSE: {entry.get('response', 'None')[:50]}...")
+            logger.info(f"  - TIMESTAMP: {entry.get('timestamp', 'None')}")
+        logger.info("=" * 50)
+    
+    # Special handling for "what did I say" meta-queries
+    if current_query and current_query.lower() in ["what did i say", "what did i ask"]:
+        logger.info("[META-QUERY] Processing 'what did I say' type question")
+        
+        # Extract only actual user messages, excluding system messages, pending, and meta-queries
+        user_messages = []
+        for entry in conversation_history:
+            # Skip system messages, pending entries and meta queries
+            if (not entry.get("is_system", False) and 
+                not entry.get("is_pending", False) and 
+                not entry.get("is_meta", False) and 
+                entry.get("query", "").strip()):
+                
+                user_query = entry.get("query", "").strip()
+                # Also skip the current query itself
+                if user_query.lower() != current_query.lower():
+                    user_messages.append(user_query)
+        
+        logger.info(f"[META-QUERY] Found {len(user_messages)} user messages: {user_messages}")
+        
+        if not user_messages:
+            response = "You haven't asked any questions yet."
+        elif len(user_messages) == 1:
+            response = f"You asked: \"{user_messages[0]}\""
+        else:
+            # Return the most recent question (excluding the current meta-query)
+            response = f"You asked: \"{user_messages[-1]}\""
+        
+        logger.info(f"[META-QUERY] Response: {response}")
+        
+        # Create final result
+        final_result = {
+            "task_type": "meta_query",
+            "success": True,
+            "session_id": state.get("session_id", ""),
+            "query": current_query,
+            "timestamp": time.time(),
+            "response": response,
+            "processing_time": processing_time,
+            "final_answer": response
+        }
+        
+        # Add the current interaction to conversation history
+        conversation_history.append({
+            "query": current_query,
+            "response": response,
+            "timestamp": time.time(),
+            "is_meta": True  # Mark as meta-query
+        })
+        
+        logger.info(f"[META-QUERY] Added meta-query to history. Now has {len(conversation_history)} entries")
+        
+        return {
+            **state, 
+            "final_result": final_result,
+            "conversation_history": conversation_history
+        }
+    
+    # Check if it's a general (non-medical) query
+    is_general_query = "general_query" in state.get("required_tasks", [])
+    # is_text_only = state.get("is_text_only", False)
+
+    # For general queries, use a simpler prompt without medical context
+    if is_general_query:
+        logger.info("Processing general (non-medical) query")
+        
+        # Include conversation history in prompt
+        conversation_context = ""
+        if conversation_history:
+            # Filter out system messages, meta-queries and pending messages for context
+            filtered_entries = [
+                entry for entry in conversation_history 
+                if not entry.get("is_system", False) and 
+                not entry.get("is_meta", False) and 
+                not entry.get("is_pending", False)
+            ]
+            
+            # Get the last 3 relevant interactions
+            recent_conversations = filtered_entries[-3:] if filtered_entries else []
+            
+            if recent_conversations:
+                conversation_context = "Previous conversation:\n"
+                for i, conv in enumerate(recent_conversations):
+                    conversation_context += f"User: {conv.get('query', '')}\n"
+                    # Limit system response to prevent overly long prompts
+                    system_response = conv.get('response', '')
+                    if len(system_response) > 150:
+                        system_response = system_response[:147] + "..."
+                    conversation_context += f"System: {system_response}\n\n"
+                
+                # Add a separator to make the context more visible to the model
+                conversation_context += "--------------------\n"
+            
+            logger.info(f"Built general query context with {len(recent_conversations)} recent user-system exchanges")
+        
+        general_prompt = PromptTemplate.from_template(
+            """You are a Medical AI Assistant providing advice and information. The user asked a question that's not specifically medical in nature, but you should still maintain your medical identity.
+
+{conversation_context}
+
+Current Question: "{query}"
+
+Respond to this question directly and conversationally. Even though this isn't a medical question, make it clear you are a Medical AI Assistant designed primarily for healthcare-related questions. Use a professional tone but avoid unnecessary medical terminology when responding to general questions.
+"""
+        )
+        
+        try:
+            chain = general_prompt | llm | StrOutputParser()
+            general_response = chain.invoke({
+                "query": current_query,
+                "conversation_context": conversation_context
+            })
+            
+            final_result = {
+                "task_type": state.get("task_type", "text_only"),
+                "success": True,
+                "session_id": state.get("session_id", ""),
+                "query": current_query,
+                "timestamp": time.time(),
+                "response": general_response,
+                "processing_time": processing_time,
+                "final_answer": general_response,
+                "is_general_query": True
+            }
+            
+            # Add the current interaction to conversation history
+            conversation_history.append({
+                "query": current_query,
+                "response": general_response,
+                "timestamp": time.time()
+            })
+            
+            logger.info(f"Added new general query entry to conversation history. Now has {len(conversation_history)} entries.")
+            logger.info(f"New entry query: {current_query[:30]}...")
+            logger.info(f"New entry response: {general_response[:30]}...")
+            
+            return {
+                **state, 
+                "final_result": final_result,
+                "conversation_history": conversation_history
+            }
+            
+        except Exception as e:
+            logger.error(f"General query processing failed: {str(e)}")
+            fallback_response = "I couldn't process your question. Could you please rephrase it?"
+            
+            final_result = {
+                "task_type": state.get("task_type", "text_only"),
+                "success": False,
+                "error": str(e),
+                "session_id": state.get("session_id", ""),
+                "query": current_query,
+                "timestamp": time.time(),
+                "response": fallback_response,
+                "processing_time": processing_time,
+                "final_answer": fallback_response,
+                "is_general_query": True
+            }
+            
+            # Add the current interaction to conversation history even if it failed
+            conversation_history.append({
+                "query": current_query,
+                "response": fallback_response,
+                "timestamp": time.time(),
+                "error": True
+            })
+            
+            return {
+                **state, 
+                "final_result": final_result,
+                "conversation_history": conversation_history
+            }
     
     # Prepare agent results
     agent_results = {}
@@ -301,10 +641,39 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
     # Determine if the response should prioritize RAG or combined results
     prioritize_rag = has_rag and "rag" in agent_results and agent_results["rag"].get("query_complexity", "simple") == "simple"
     
+    # Include conversation history in the medical prompt
+    conversation_context = ""
+    if conversation_history:
+        # Filter out system initialization messages and meta-queries for context
+        relevant_entries = [
+            entry for entry in conversation_history 
+            if not entry.get("is_system", False) and not entry.get("is_meta", False) and not entry.get("is_pending", False)
+        ]
+        
+        # Get the last 3 interactions at most
+        recent_conversations = relevant_entries[-3:] if relevant_entries else []
+        
+        if recent_conversations:
+            conversation_context = "Previous conversation context:\n"
+            for i, conv in enumerate(recent_conversations):
+                conversation_context += f"User: {conv.get('query', '')}\n"
+                # Limit system response to prevent overly long prompts
+                system_response = conv.get('response', '')
+                if len(system_response) > 150:  # Shorter limit for synthesizer to save space
+                    system_response = system_response[:147] + "..."
+                conversation_context += f"System: {system_response}\n\n"
+            
+            # Add a separator to make the context more visible to the model
+            conversation_context += "--------------------\n"
+        
+        logger.info(f"Built conversation context with {len(recent_conversations)} recent user-system exchanges")
+    
     # Set up different prompts based on the scenario
     if prioritize_rag:
-        prompt_template = """You are a medical AI assistant synthesizing results from document analysis. 
+        prompt_template = """You are a Medical AI Assistant specializing in healthcare and medical consultation. Your purpose is to provide accurate medical information based on document analysis.
         
+{conversation_context}
+
 The user asked: "{query}"
 
 The document analysis yielded the following information:
@@ -314,30 +683,43 @@ Sources cited:
 {rag_sources}
 
 Your task:
-1. Respond to the user's query directly using the document analysis results
-2. Maintain all citations and references to documents
-3. Format your response in a clear, professional manner
-4. Do not add medical disclaimers or warnings"""
+1. Consider the previous conversation context if relevant
+2. Respond to the user's query directly using the document analysis results
+3. Maintain all citations and references to documents
+4. Format your response in a clear, professional manner suited for medical consultation
+5. Always identify yourself as a Medical AI Assistant
+6. Respond in English, maintaining medical accuracy"""
     else:
-        prompt_template = """You are a medical AI assistant synthesizing results from multiple analysis tasks including {tasks}.
+        prompt_template = """You are a Medical AI Assistant specializing in healthcare and medical consultation. Your purpose is to provide comprehensive medical analysis based on multiple data sources including {tasks}.
         
+{conversation_context}
+
 The user asked: "{query}"
 
 Combined analysis results:
 {combined_results}
 
 Your task:
-1. Synthesize these results into a comprehensive, cohesive response
-2. Directly address the user's query with relevant findings
-3. Format your response in a clear, professional manner
-4. IMPORTANT: If any classifications show LOW CONFIDENCE, clearly mention this uncertainty and explain the LLM's analysis
-5. Do not add medical disclaimers or warnings"""
+1. Consider the previous conversation context if relevant
+2. Synthesize these results into a comprehensive, cohesive medical response
+3. Directly address the user's query with relevant medical findings
+4. Format your response in a clear, professional manner suitable for medical consultation
+5. IMPORTANT: If any classifications show LOW CONFIDENCE, clearly mention this uncertainty and explain your analysis
+6. Always identify yourself as a Medical AI Assistant
+7. Respond in English, maintaining medical accuracy"""
     
     # Format the prompt arguments
     prompt_args = {
-        "query": state.get("query", ""),
+        "query": current_query,
         "tasks": tasks_str,
+        "conversation_context": conversation_context
     }
+    
+    # Debug the exact conversation context being sent
+    logger.info("=" * 50)
+    logger.info("EXACT CONVERSATION CONTEXT FOR LLM:")
+    logger.info(f"\n{conversation_context}")
+    logger.info("=" * 50)
     
     # Add RAG-specific information if prioritizing RAG
     if prioritize_rag and has_rag:
@@ -420,7 +802,7 @@ Your task:
             "task_type": state.get("task_type", "comprehensive"),
             "success": True,
             "session_id": state.get("session_id", ""),
-            "query": state.get("query", ""),
+            "query": current_query,
             "timestamp": time.time(),
             "multi_task_analysis": {
                 "tasks_requested": state.get("required_tasks", []),
@@ -433,7 +815,23 @@ Your task:
             "final_answer": synthesized_response
         }
         
-        return {**state, "final_result": final_result}
+        # Add the current interaction to conversation history
+        conversation_history.append({
+            "query": current_query,
+            "response": synthesized_response,
+            "timestamp": time.time(),
+            "tasks_completed": state.get("completed_tasks", [])
+        })
+        
+        logger.info(f"Added new entry to conversation history. Now has {len(conversation_history)} entries.")
+        logger.info(f"New entry query: {current_query[:30]}...")
+        logger.info(f"New entry response: {synthesized_response[:30]}...")
+        
+        return {
+            **state, 
+            "final_result": final_result,
+            "conversation_history": conversation_history
+        }
         
     except Exception as e:
         logger.error(f"Result synthesis failed: {str(e)}")
@@ -451,11 +849,23 @@ Your task:
             "success": False,
             "error": str(e),
             "session_id": state.get("session_id", ""),
-            "query": state.get("query", ""),
+            "query": current_query,
             "timestamp": time.time(),
             "response": fallback_response,
             "processing_time": processing_time,
             "final_answer": fallback_response
         }
         
-        return {**state, "final_result": final_result}
+        # Add the current interaction to conversation history even if it failed
+        conversation_history.append({
+            "query": current_query,
+            "response": fallback_response,
+            "timestamp": time.time(),
+            "error": True
+        })
+        
+        return {
+            **state, 
+            "final_result": final_result,
+            "conversation_history": conversation_history
+        }

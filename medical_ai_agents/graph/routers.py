@@ -50,9 +50,14 @@ def task_router(state: SystemState) -> str:
             state["uploaded_documents"] = valid_docs
             return "rag"
     
-    # Text-only queries always go to VQA
+    # Handle non-medical general queries - route directly to synthesizer
+    if "general_query" in required_tasks:
+        logger.info("General (non-medical) query detected, routing directly to synthesizer")
+        return "synthesizer"
+    
+    # Text-only medical queries go to VQA
     if is_text_only or not image_path or not os.path.exists(image_path):
-        logger.info("Text-only mode, routing to VQA")
+        logger.info("Text-only medical query, routing to VQA")
         return "vqa"
     
     # Find next task to execute
