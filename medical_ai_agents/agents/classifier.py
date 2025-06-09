@@ -102,9 +102,7 @@ You MUST end with EXACTLY this format (use Final Answer with capital letters):
 
 Thought: [your final analysis]
 Action: Final Answer
-Action Input: {{
-  "answer": {{"class_name": "[class]", "confidence": "[percentage]", "explanation": "[reason]"}}
-}}
+Action Input: {{"answer": {{"class_name": "[class]", "confidence": "[percentage]", "explanation": "[reason]"}}}}
 
 DO NOT deviate from this format or your analysis will be rejected.
 NEVER use "Final Answer:" as a standalone line - it MUST be "Action: Final Answer".
@@ -740,14 +738,14 @@ The model's confidence is below threshold ({confidence:.1%}). LLM assessment:
         
         # Extract Action Input
         input_val = None
-        a_input = re.search(r"Action Input:\s*(\{.+?\})", txt, re.DOTALL)
+        a_input = re.search(r'Action Input:\s*(\{.*\})', txt, re.DOTALL)
         if a_input:
             try:
                 input_val = json.loads(a_input.group(1))
                 print(f"🔍 DEBUG: Parsed action input JSON")
             except Exception as e:
                 print(f"🔍 DEBUG: Failed to parse action input JSON: {str(e)}")
-                
+                        
         print(f"🔍 FINAL PARSE RESULT - thought: {'Found' if thought_val else 'None'}, action: {action_val}")
         return thought_val, action_val, input_val
 

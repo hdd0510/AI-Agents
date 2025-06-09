@@ -341,7 +341,8 @@ Always use the exact format above. Start with "Thought:"."""
 
     def _extract_task_input(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Extract task input."""
-        medical_context = state.get("medical_context", {}).copy()
+        medical_context = state.get("medical_context")
+        medical_context = medical_context.copy() if medical_context else {}
         
         # Add context from other agents
         if "detector_result" in state:
