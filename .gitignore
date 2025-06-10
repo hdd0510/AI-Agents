@@ -7,3 +7,4 @@ medical_ai_memory.db
 LightRAG/
 medical_ai_agents/tools/vqa/LLaVA/
 temp/
+sessions/

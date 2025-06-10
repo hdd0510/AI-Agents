@@ -344,7 +344,7 @@ def create_enhanced_chatbot():
                 # Clear button
                 with gr.Row():
                     # Fix: Thêm session_state vào danh sách để clear
-                    clear_btn = gr.ClearButton([msg, chatbot, image], value="Clear Chat")
+                    clear_btn = gr.ClearButton([msg, chatbot, image, image_status], value="Clear Chat")
                     
                     # Thêm nút để đồng bộ hóa lịch sử
                     sync_history_btn = gr.Button("🔄 Sync History", variant="secondary")
@@ -390,13 +390,13 @@ def create_enhanced_chatbot():
                     logger.info("Clear chat triggered - resetting session state and UI")
                     
                     # Trả về empty session và UI elements
-                    return {"conversation_history": []}, "", [], None
+                    return {"conversation_history": []}, "", [], None, "Chưa có ảnh"
                 
                 # Kết nối nút clear với hàm xử lý
                 clear_btn.click(
                     fn=clear_handler,
                     inputs=[],
-                    outputs=[session_state, msg, chatbot, image]
+                    outputs=[session_state, msg, chatbot, image, image_status]
                 )
                 
                 # Xử lý sự kiện đồng bộ hóa lịch sử
