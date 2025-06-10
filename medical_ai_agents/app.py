@@ -2,14 +2,14 @@
 # -*- coding: utf-8 -*-
 
 """
-Medical AI Chatbot Launcher - CLEANED & SIMPLIFIED
-===========================
-Script khởi động chatbot với logic đã được simplified.
+Medical AI Assistant
+----------------
+Enhanced interactive chatbot with multi-modal capabilities.
 """
+
 # ---- PATCH Pydantic ↔ Starlette Request -------------------------------------
 from starlette.requests import Request as _StarletteRequest
 from pydantic_core import core_schema
-
 def _any_schema(*_):        # chấp mọi số đối số
     return core_schema.any_schema()
 
@@ -20,18 +20,42 @@ import os
 import sys
 import json
 import time
+import uuid
 import logging
+import argparse
+from typing import Dict, Any, List, Tuple, Optional
 from pathlib import Path
 import re
-os.environ['GRADIO_TEMP_DIR'] = '/tmp'
+import warnings
+from datetime import datetime
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Thiết lập logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Add project root to path
+# Bỏ qua warning từ FAISS AVX2
+warnings.filterwarnings("ignore", message=".*Could not load library with AVX2 support.*")
+logging.getLogger("faiss.loader").setLevel(logging.ERROR)
+
+# Thêm thư mục gốc của project vào sys.path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
+
+# Import the Medical AI System
+from medical_ai_agents import MedicalAISystem, MedicalGraphConfig
+from medical_ai_agents.memory.long_short_memory import LongShortTermMemory, MedicalAIChatbot
+
+os.environ['GRADIO_TEMP_DIR'] = '/tmp'
+
+# ---- PATCH Pydantic ↔ Starlette Request -------------------------------------
+from starlette.requests import Request as _StarletteRequest
+from pydantic_core import core_schema
+
+def _any_schema(*_):        # chấp mọi số đối số
+    return core_schema.any_schema()
+
+_StarletteRequest.__get_pydantic_core_schema__ = classmethod(_any_schema)
+# -----------------------------------------------------------------------------
 
 class MedicalAIConfig:
     """Cấu hình cho Medical AI Chatbot."""
@@ -114,92 +138,402 @@ class MedicalAIConfig:
                 base_dict[key] = value
     
     def get(self, key_path: str, default=None):
-        """Get config value using dot notation."""
-        keys = key_path.split('.')
+        """Get a config value by key path."""
+        keys = key_path.split(".")
         value = self.config
-        
         for key in keys:
             if isinstance(value, dict) and key in value:
                 value = value[key]
             else:
                 return default
-        
         return value
 
 def create_enhanced_chatbot():
-    """Tạo chatbot với cấu hình nâng cao."""
-    
+    """Create an enhanced chatbot with a more visually appealing interface."""
     import gradio as gr
-    from medical_ai_agents.memory import MedicalAIChatbot, LongShortTermMemory
-    from medical_ai_agents import MedicalGraphConfig
+    
+    # Get logger
+    logger = logging.getLogger(__name__)
+    
+    # Import components
+    from medical_ai_agents import MedicalAISystem, MedicalGraphConfig
     
     # Load config
-    config = MedicalAIConfig()
+    config = MedicalAIConfig("config.json")
+    logger.info(f"Loaded config, device: {config.get('medical_ai.device')}")
     
     class EnhancedMedicalAIChatbot(MedicalAIChatbot):
         """Chatbot với các tính năng nâng cao + streaming (SIMPLIFIED)."""
         
         def __init__(self, config: MedicalAIConfig):
             self.app_config = config
-            super().__init__()
-        
-        def _initialize_medical_ai(self):
-            """Khởi tạo Medical AI với config tùy chỉnh."""
-            medical_config = MedicalGraphConfig(
-                device=self.app_config.get("medical_ai.device", "cuda"),
-                detector_model_path=self.app_config.get("medical_ai.detector_model_path"),
-                vqa_model_path=self.app_config.get("medical_ai.vqa_model_path"),
-                modality_classifier_path=self.app_config.get("medical_ai.modality_classifier_path"),
-                region_classifier_path=self.app_config.get("medical_ai.region_classifier_path")
-            )
+            self.memory = LongShortTermMemory()
+            self.medical_ai = self._initialize_medical_ai()
             
-            from medical_ai_agents import MedicalAISystem
-            return MedicalAISystem(medical_config)
+            # Đảm bảo thư mục persistent_sessions tồn tại
+            self._ensure_persistent_sessions_dir()
+        
+        def _sync_ui_history_with_conversation(self, history, conversation_history):
+            """Đồng bộ hóa history UI với conversation_history để đảm bảo chúng khớp nhau."""
+            if not conversation_history:
+                return history
+                
+            # Tạo một bản sao của history để không thay đổi trực tiếp
+            new_history = history.copy() if history else []
+            
+            # Tạo set các query đã có trong UI history
+            existing_queries = set()
+            for msg_pair in new_history:
+                if len(msg_pair) >= 2:
+                    existing_queries.add(msg_pair[0])
+            
+            # Thêm các tin nhắn từ conversation_history vào UI history nếu chưa có
+            for entry in conversation_history:
+                query = entry.get("query")
+                response = entry.get("response")
+                
+                if query and response and query not in existing_queries:
+                    # Thêm vào history UI
+                    new_history.insert(0, [query, response])
+                    existing_queries.add(query)
+            
+            return new_history
+
+        def create_enhanced_interface(self):
+            """Create an enhanced user interface for the chatbot."""
+            import gradio as gr
+            
+            # Configuration
+            theme = self.app_config.get("ui.theme", "soft")
+            chat_height = self.app_config.get("ui.chat_height", 500)
+            
+            # Create interface with enhanced styling
+            with gr.Blocks(theme=theme, title=self.app_config.get("app.title", "Medical AI Assistant")) as interface:
+                # Header
+                with gr.Row():
+                    gr.HTML("""
+                    <div style="text-align: center; margin-bottom: 5px; display:flex; align-items:center; justify-content:center; gap:10px;">
+                        <h1 style="margin: 10px 0;">🩺 Medical AI Assistant</h1>
+                    </div>
+                    <p style="text-align: center; margin-bottom: 10px; color: #666;">
+                        The AI-powered system for medical image analysis and consultation
+                    </p>
+                    """)
+                
+                # Username input (for session persistence)
+                with gr.Row():
+                    username = gr.Textbox(
+                        label="Username (optional, for session persistence)",
+                        placeholder="Enter username to maintain your chat history",
+                        value="default_user"
+                    )
+                
+                # Main chatbot interface
+                with gr.Row():
+                    chatbot = gr.Chatbot(
+                        height=chat_height,
+                        show_copy_button=True,
+                        render=True
+                    )
+                    
+                # Input components
+                with gr.Row():
+                    with gr.Column(scale=4):
+                        msg = gr.Textbox(
+                            show_label=False,
+                            placeholder="Nhập câu hỏi về hình ảnh y tế hoặc hỏi tôi về các vấn đề y khoa...",
+                            container=False
+                        )
+                    with gr.Column(scale=1, min_width=100):
+                        with gr.Row():
+                            image = gr.UploadButton(
+                                "📷 Ảnh nội soi",
+                                file_types=["image"],
+                                type="filepath"
+                            )
+                        with gr.Row():
+                            image_status = gr.Textbox(
+                                show_label=False,
+                                placeholder="Chưa có ảnh",
+                                interactive=False,
+                                container=False,
+                                scale=1,
+                                min_width=100
+                            )
+                    with gr.Column(scale=1, min_width=100):
+                        submit = gr.Button("Submit", variant="primary")
+                
+                # State for session management
+                session_state = gr.State({})
+                
+                # Auto-sync function to load history when interface is first loaded
+                def auto_sync_history(username):
+                    # Khởi tạo session_state mới
+                    new_state = {}
+                    
+                    # Thử tải session ID từ persistent storage
+                    session_id = self._load_persistent_session_id(username)
+                    if session_id:
+                        new_state["session_id"] = session_id
+                        logger.info(f"Auto-sync: Loaded session_id {session_id} for {username}")
+                        
+                        # Tạo user ID từ username
+                        user_id = self.generate_user_id(username)
+                        new_state["user_id"] = user_id
+                        
+                        # Tải conversation_history
+                        conversation_history = self._load_conversation_history(session_id)
+                        if conversation_history:
+                            new_state["conversation_history"] = conversation_history
+                            logger.info(f"Auto-sync: Loaded {len(conversation_history)} entries to conversation_history")
+                            
+                            # Tải lịch sử UI
+                            ui_history = self.load_previous_session(username, session_id)
+                            if not ui_history:
+                                # Nếu không có UI history, tạo từ conversation_history
+                                ui_history = []
+                                for entry in conversation_history:
+                                    query = entry.get("query")
+                                    response = entry.get("response")
+                                    if query and response:
+                                        ui_history.append([query, response])
+                                logger.info(f"Auto-sync: Created {len(ui_history)} UI history entries from conversation_history")
+                            
+                            return ui_history, new_state
+                    
+                    # Nếu không tìm thấy session hoặc history
+                    return [], new_state
+                
+                # Function to update image status
+                def update_image_status(image_path):
+                    if image_path:
+                        file_name = os.path.basename(image_path)
+                        if len(file_name) > 15:
+                            file_name = file_name[:12] + "..."
+                        return f"✅ {file_name}"
+                    return "Chưa có ảnh"
+                
+                # Events
+                image.upload(
+                    fn=update_image_status,
+                    inputs=[image],
+                    outputs=[image_status],
+                    queue=False
+                )
+                
+                submit.click(
+                    fn=self.process_message_streaming,
+                    inputs=[msg, image, chatbot, username, session_state],
+                    outputs=[msg, chatbot, session_state],
+                    queue=True
+                )
+                msg.submit(
+                    fn=self.process_message_streaming,
+                    inputs=[msg, image, chatbot, username, session_state],
+                    outputs=[msg, chatbot, session_state],
+                    queue=True
+                )
+                
+                # Auto-sync on page load
+                interface.load(
+                    fn=auto_sync_history,
+                    inputs=[username],
+                    outputs=[chatbot, session_state]
+                )
+                
+                # Clear button
+                with gr.Row():
+                    # Fix: Thêm session_state vào danh sách để clear
+                    clear_btn = gr.ClearButton([msg, chatbot, image], value="Clear Chat")
+                    
+                    # Thêm nút để đồng bộ hóa lịch sử
+                    sync_history_btn = gr.Button("🔄 Sync History", variant="secondary")
+                
+                # Xử lý sự kiện clear để cũng xóa session_state
+                def clear_handler():
+                    # Xóa dữ liệu session_state, conversation_history và file lịch sử nếu có
+                    try:
+                        session_id = session_state.get("session_id") if isinstance(session_state, dict) else None
+                        username_val = username.value if hasattr(username, 'value') else None
+                        # Xóa conversation_history trong session_state
+                        if isinstance(session_state, dict):
+                            # Reset hoàn toàn session_state về empty dict thay vì chỉ xóa conversation_history
+                            for key in list(session_state.keys()):
+                                if key != "session_id":  # Giữ lại session_id
+                                    session_state.pop(key, None)
+                            session_state["conversation_history"] = []
+                            
+                        # Xóa file history nếu có session_id
+                        if session_id:
+                            import os
+                            # Xóa file history UI
+                            history_file = os.path.join("sessions", "history", f"{session_id}.json")
+                            if os.path.exists(history_file):
+                                try:
+                                    os.remove(history_file)
+                                    logger.info(f"Removed history file: {history_file}")
+                                except Exception as e:
+                                    logger.error(f"Failed to remove history file: {e}")
+                                    
+                            # Xóa file conversation_history
+                            conv_file = os.path.join("sessions", "conversation_history", f"{session_id}.json")
+                            if os.path.exists(conv_file):
+                                try:
+                                    os.remove(conv_file)
+                                    logger.info(f"Removed conversation history file: {conv_file}")
+                                except Exception as e:
+                                    logger.error(f"Failed to remove conversation history file: {e}")
+                    except Exception as e:
+                        logger.error(f"Error clearing chat data: {e}")
+                        
+                    # Thêm debug log
+                    logger.info("Clear chat triggered - resetting session state and UI")
+                    
+                    # Trả về empty session và UI elements
+                    return {"conversation_history": []}, "", [], None
+                
+                # Kết nối nút clear với hàm xử lý
+                clear_btn.click(
+                    fn=clear_handler,
+                    inputs=[],
+                    outputs=[session_state, msg, chatbot, image]
+                )
+                
+                # Xử lý sự kiện đồng bộ hóa lịch sử
+                def sync_history_handler(history, username, session_state):
+                    # Lấy session_id từ session_state hoặc từ persistent storage
+                    session_id = session_state.get("session_id")
+                    if not session_id:
+                        session_id = self._load_persistent_session_id(username)
+                        if session_id:
+                            session_state["session_id"] = session_id
+                    
+                    # Nếu không có session_id, không thể đồng bộ
+                    if not session_id:
+                        return history, session_state
+                    
+                    # Tải conversation_history từ file
+                    conversation_history = self._load_conversation_history(session_id)
+                    if not conversation_history:
+                        return history, session_state
+                    
+                    # Cập nhật session_state
+                    session_state["conversation_history"] = conversation_history
+                    
+                    # Đồng bộ hóa history UI với conversation_history
+                    synced_history = self._sync_ui_history_with_conversation(history, conversation_history)
+                    
+                    # Log kết quả
+                    logger.info(f"Synced UI history: {len(history)} -> {len(synced_history)} messages")
+                    
+                    return synced_history, session_state
+                
+                # Kết nối nút đồng bộ với hàm xử lý
+                sync_history_btn.click(
+                    fn=sync_history_handler,
+                    inputs=[chatbot, username, session_state],
+                    outputs=[chatbot, session_state]
+                )
+                    
+                # Footer
+                with gr.Row():
+                    gr.HTML("""
+                    <div style="text-align:center; margin-top:10px; padding: 5px; color: #666">
+                        <p>Medical AI Assistant | Created by Medical AI Team | Version 1.0.0</p>
+                    </div>
+                    """)
+                    
+            return interface
+        
+        def _ensure_persistent_sessions_dir(self):
+            """Đảm bảo thư mục lưu trữ session ID tồn tại."""
+            import os
+            persistent_dir = os.path.join(os.path.dirname(__file__), '..', 'data', 'persistent_sessions')
+            os.makedirs(persistent_dir, exist_ok=True)
+            logger.info(f"Persistent sessions directory ensured: {persistent_dir}")
+
+        def _get_persistent_session_path(self, username: str) -> str:
+            """Lấy đường dẫn file lưu trữ session ID cho user."""
+            import os
+            user_id = self.generate_user_id(username)
+            return os.path.join(os.path.dirname(__file__), '..', 'data', 'persistent_sessions', f"{user_id}.txt")
+            
+        def _load_persistent_session_id(self, username: str) -> str:
+            """Tải session ID đã lưu trữ nếu có."""
+            session_file = self._get_persistent_session_path(username)
+            try:
+                if os.path.exists(session_file):
+                    with open(session_file, 'r') as f:
+                        saved_session_id = f.read().strip()
+                        if saved_session_id:
+                            logger.info(f"Loaded persistent session ID for {username}: {saved_session_id}")
+                            return saved_session_id
+            except Exception as e:
+                logger.error(f"Error loading persistent session ID: {str(e)}")
+            return None
+            
+        def _save_persistent_session_id(self, username: str, session_id: str) -> bool:
+            """Lưu session ID cho lần sử dụng tiếp theo."""
+            session_file = self._get_persistent_session_path(username)
+            try:
+                with open(session_file, 'w') as f:
+                    f.write(session_id)
+                logger.info(f"Saved persistent session ID for {username}: {session_id}")
+                return True
+            except Exception as e:
+                logger.error(f"Error saving persistent session ID: {str(e)}")
+                return False
+
+        def _initialize_medical_ai(self):
+            """Khởi tạo Medical AI system."""
+            device = self.app_config.get("medical_ai.device", "cpu")
+            logger.info(f"Initializing Medical AI with device: {device}")
+            
+            # Chỉ truyền tham số device để tương thích với cả 2 phiên bản của MedicalGraphConfig
+            return MedicalAISystem(MedicalGraphConfig(device=device))
         
         def _save_image_to_temp(self, image) -> str:
-            """Save uploaded image to temporary file."""
-            import os
+            """Lưu ảnh vào thư mục tạm."""
             import tempfile
-            import time
+            import os
+            from PIL import Image
+            import io
             
-            # Create temp dir if doesn't exist
-            temp_dir = os.path.join(os.path.dirname(__file__), '..', 'temp')
-            os.makedirs(temp_dir, exist_ok=True)
-            
-            # Generate temp file path with timestamp
-            timestamp = int(time.time())
-            temp_path = os.path.join(temp_dir, f"upload_{timestamp}.jpg")
-            
-            # Save image
-            try:
-                if hasattr(image, 'save'):
-                    # Pillow Image object
-                    image.save(temp_path)
-                elif isinstance(image, str) and (image.startswith('data:image') or os.path.isfile(image)):
-                    # Data URL or file path
-                    if image.startswith('data:image'):
-                        import base64
-                        # Extract base64 data
-                        header, encoded = image.split(",", 1)
-                        data = base64.b64decode(encoded)
-                        with open(temp_path, "wb") as f:
-                            f.write(data)
-                    else:
-                        # Copy existing file
-                        import shutil
-                        shutil.copy(image, temp_path)
-                else:
-                    # Unknown format
-                    with open(temp_path, "wb") as f:
-                        f.write(image)
+            if not image:
+                logger.error("No image provided")
+                return None
                 
-                return temp_path
-            except Exception as e:
-                logger.error(f"Error saving image: {str(e)}")
-                # Fallback to a tempfile
+            try:
+                # Kiểm tra xem image có phải đã là đường dẫn file không
+                if isinstance(image, str) and os.path.isfile(image):
+                    return image
+                
+                # Xử lý cho trường hợp image là numpy array (từ Gradio)
+                if hasattr(image, 'shape') and len(getattr(image, 'shape', [])) == 3:
+                    # Đây là numpy array
+                    img = Image.fromarray(image)
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
+                        img.save(tmp.name, format='JPEG')
+                        return tmp.name
+                
+                # Xử lý cho trường hợp image là bytes
+                if isinstance(image, bytes):
+                    try:
+                        # Thử mở như một ảnh
+                        img = Image.open(io.BytesIO(image))
+                        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
+                            img.save(tmp.name, format='JPEG')
+                            return tmp.name
+                    except Exception as e:
+                        logger.warning(f"Could not process image bytes: {str(e)}")
+                
+                # Fallback: Lưu trực tiếp
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
                     tmp.write(image if isinstance(image, bytes) else str(image).encode('utf-8'))
                     return tmp.name
+            except Exception as e:
+                logger.error(f"Error saving image to temp: {str(e)}")
+                return None
         
         def _save_visualization(self, base64_data: str, filename: str) -> str:
             """Save visualization image from base64 data."""
@@ -232,6 +566,7 @@ def create_enhanced_chatbot():
         def process_message_streaming(self, message, image, history, username, session_state):
             """FIXED streaming version - properly preserve query in conversation history."""
             import uuid
+            import os
             
             # 1. CRITICAL FIX: Store original message early 
             original_message = message.strip() if message else ""
@@ -240,21 +575,73 @@ def create_enhanced_chatbot():
             
             logger.info(f"[DEBUG] Processing message: '{original_message[:50]}...'")
             
-            # Generate session and user IDs
+            # Generate session ID với persistent storage
             session_id = session_state.get("session_id")
-            # Log the session state to debug
             logger.info(f"[SESSION] Current session state keys: {list(session_state.keys())}")
             logger.info(f"[SESSION] Current session_id from state: {session_id}")
             
+            # Flag để kiểm tra nếu session được phục hồi
+            is_restored_session = False
+            
+            if not session_id:
+                # Thử tải session ID từ persistent storage
+                session_id = self._load_persistent_session_id(username)
+                if session_id:
+                    is_restored_session = True
+            
+            # Nếu vẫn chưa có session ID, tạo mới
             if not session_id:
                 session_id = str(uuid.uuid4())
-                session_state["session_id"] = session_id
                 logger.info(f"Created new session ID: {session_id}")
+                
+                # Lưu session ID mới vào persistent storage
+                self._save_persistent_session_id(username, session_id)
             else:
                 logger.info(f"Reusing existing session ID: {session_id}")
             
+            # Tạo user ID từ username
             user_id = self.generate_user_id(username)
+            
+            # Cập nhật session_state
+            session_state["session_id"] = session_id
             session_state["user_id"] = user_id
+            
+            # FIX: Luôn load lịch sử nếu là session được phục hồi, không chỉ khi history trống
+            if is_restored_session:
+                logger.info(f"Loading history from restored session: {session_id}")
+                old_history = self.load_previous_session(username, session_id)
+                
+                # FIX: Đồng thời khôi phục conversation_history từ file nếu có
+                if "conversation_history" not in session_state or not session_state["conversation_history"]:
+                    conversation_history = self._load_conversation_history(session_id)
+                    if conversation_history:
+                        logger.info(f"[FIX] Manually loaded {len(conversation_history)} entries to conversation_history")
+                        session_state["conversation_history"] = conversation_history
+                    else:
+                        # Khởi tạo mới nếu không tìm thấy
+                        logger.info(f"[FIX] Initializing new conversation_history for session {session_id}")
+                        session_state["conversation_history"] = []
+                
+                if old_history:
+                    # FIX: Chỉ thay thế history nếu nó trống hoặc không có tin nhắn nào
+                    if not history or len(history) == 0:
+                        history = old_history
+                    else:
+                        # FIX: Nếu đã có history, kiểm tra xem có trùng lặp không
+                        # và chỉ thêm các tin nhắn không trùng lặp
+                        existing_messages = set()
+                        for msg_pair in history:
+                            if len(msg_pair) >= 2:
+                                existing_messages.add(msg_pair[0])
+                        
+                        # Thêm các tin nhắn cũ không trùng lặp
+                        for old_msg_pair in old_history:
+                            if len(old_msg_pair) >= 2 and old_msg_pair[0] not in existing_messages:
+                                history.insert(0, old_msg_pair)  # Thêm vào đầu để giữ thứ tự thời gian
+                                existing_messages.add(old_msg_pair[0])
+                    
+                    yield "", history, session_state
+                    logger.info(f"Loaded {len(old_history)} messages from old session")
             
             # Start with user message - FIXED: preserve original message
             history.append([original_message, "🤔 Analyzing..."])  # Use original_message
@@ -267,6 +654,18 @@ def create_enhanced_chatbot():
                 # IMPORTANT: Save session_id in both global state and temporary result
                 # This ensures the session_id persists through the entire process
                 session_state["session_id"] = session_id
+                
+                # FIX: Đảm bảo conversation_history được khởi tạo đúng cách
+                if "conversation_history" not in session_state or not session_state["conversation_history"]:
+                    # Thử load lại từ file nếu chưa có
+                    conversation_history = self._load_conversation_history(session_id)
+                    if conversation_history:
+                        logger.info(f"[FIX] Manually loaded {len(conversation_history)} entries to conversation_history")
+                        session_state["conversation_history"] = conversation_history
+                    else:
+                        # Khởi tạo mới nếu không tìm thấy
+                        logger.info(f"[FIX] Initializing new conversation_history for session {session_id}")
+                        session_state["conversation_history"] = []
                 
                 # Determine processing mode
                 has_image = image is not None
@@ -301,45 +700,73 @@ def create_enhanced_chatbot():
                         response_parts = []
                         
                         # Handle polyp detection if available
-                        if "polyps" in result:
-                            polyp_count = len(result.get("polyps", []))
+                        if "agent_results" in result and "detector" in result.get("agent_results", {}):
+                            detector = result["agent_results"]["detector"]
                             
-                            if polyp_count > 0:
-                                # Display entry 0 response first
+                            if detector.get("success", False) and detector.get("count", 0) > 0:
+                                # Display entry 0 response first but REMOVE Medical AI Assessment prefix if exists
                                 if "response" in result and isinstance(result["response"], list) and len(result["response"]) > 0:
-                                    response_parts.append(f"💬 **{result['response'][0]}**\n")
+                                    response_text = result['response'][0]
+                                    # Kiểm tra và loại bỏ tiêu đề Medical AI Assessment nếu có
+                                    if response_text.startswith("Medical AI Assessment:"):
+                                        response_text = response_text.replace("Medical AI Assessment:", "").strip()
+                                    response_parts.append(f"💬 **{response_text}**\n")
                                 
-                                response_parts.append("🔍 **Detection Results:**")
-                                response_parts.append(f"- Found {polyp_count} polyp(s)")
-                                
-                                if result["polyps"] and "confidence" in result["polyps"][0]:
-                                    confidence = result["polyps"][0]["confidence"]
-                                    response_parts.append(f"- Confidence: {confidence:.1%}")
-                                
-                                # Handle visualization (existing code...)
-                                if "detector_result" in result.get("agent_results", {}) and result["agent_results"].get("detector", {}).get("visualization_base64"):
-                                    viz_base64 = result["agent_results"]["detector"]["visualization_base64"]
+                                # Lưu thông tin visualization (nhưng chưa hiển thị)
+                                if detector.get("visualization_base64"):
+                                    viz_base64 = detector["visualization_base64"]
                                     viz_filename = f"polyp_viz_{session_state.get('session_id', 'unknown')}_{int(time.time())}.png"
                                     viz_path = self._save_visualization(viz_base64, viz_filename)
                                     
+                                    # FIXED: Lưu cả path và base64 data
                                     session_state["last_visualization"] = viz_path
+                                    session_state["last_visualization_base64"] = viz_base64
                                     session_state["has_visualization"] = True
-                                    
-                                    img_data_url = f"data:image/png;base64,{viz_base64}"
-                                    response_parts.append("\n\n📊 **Polyp Detection Results:**")
-                                    response_parts.append(f'<img src="{img_data_url}" alt="Polyp Detection Results" style="max-width: 100%; height: auto; border-radius: 8px; margin: 10px 0;">')
+                                    session_state["pending_viz"] = True  # Flag để hiển thị sau final_answer
                             else:
-                                # Display entry 0 response first for no polyp case
+                                # No polyps detected case
+                                # Display entry 0 response first for no polyp case but REMOVE Medical AI Assessment prefix if exists
                                 if "response" in result and isinstance(result["response"], list) and len(result["response"]) > 0:
-                                    response_parts.append(f"💬 **{result['response'][0]}**\n")
+                                    response_text = result['response'][0]
+                                    # Kiểm tra và loại bỏ tiêu đề Medical AI Assessment nếu có
+                                    if response_text.startswith("Medical AI Assessment:"):
+                                        response_text = response_text.replace("Medical AI Assessment:", "").strip()
+                                    response_parts.append(f"💬 **{response_text}**\n")
                                 response_parts.append("🔍 **No polyps detected in this image.**")
+                        # Giữ lại điều kiện cũ nhưng ghi log để hiểu sự khác biệt
+                        elif "polyps" in result:
+                            polyp_count = len(result.get("polyps", []))
+                        
+                        # FIXED: Check if Medical AI Assessment is already added
+                        has_assessment_header = any("Medical AI Assessment" in part for part in response_parts)
                         
                         # Add final answer if available
                         if "final_answer" in result:
-                            response_parts.append("\n💬 **Medical AI Assessment:**")
+                            # REMOVED: Không hiển thị tiêu đề Medical AI Assessment nữa
+                            # if not has_assessment_header:
+                            #     response_parts.append("\n💬 **Medical AI Assessment:**")
                             response_parts.append(result["final_answer"])
+                            
+                            # Hiển thị visualization sau final_answer nếu có
+                            if session_state.get("pending_viz") and session_state.get("last_visualization_base64"):
+                                viz_base64 = session_state["last_visualization_base64"]
+                                img_data_url = f"data:image/png;base64,{viz_base64}"
+                                response_parts.append("\n\n📊 **Detector Results:**")
+                                
+                                # Add synthesized analysis before the image
+                                if "final_answer" in result and not result["final_answer"] in response_parts:
+                                    # Get a short version of the synthesized result if it's long
+                                    synth_result = result["final_answer"]
+                                    if len(synth_result) > 150:
+                                        sentences = synth_result.split('.')[:2]
+                                        short_result = '.'.join(sentences) + '.'
+                                        response_parts.append(f"{short_result}\n")
+                                
+                                # Add the visualization image
+                                response_parts.append(f'<img src="{img_data_url}" alt="Polyp Detection Results" style="max-width: 100%; height: auto; border-radius: 8px; margin: 10px 0;">')
+                                session_state["pending_viz"] = False  # Reset flag
                         
-                        # 3. CRITICAL FIX: Update conversation history properly
+                        # CRITICAL FIX: Update conversation history properly
                         if "conversation_history" in result:
                             updated_history = result["conversation_history"]
                             
@@ -354,6 +781,9 @@ def create_enhanced_chatbot():
                             
                             session_state["conversation_history"] = updated_history
                             logger.info(f"[FIXED] Updated session with conversation_history: {len(updated_history)} entries")
+                            
+                            # FIX: Lưu conversation_history vào file để phục hồi sau này
+                            self._save_conversation_history(session_id, updated_history)
                         
                         # Generate streaming response
                         streaming_text = "🔬 **Medical Image Analysis**\n\n"
@@ -383,11 +813,16 @@ def create_enhanced_chatbot():
                         
                         # Streaming cho final_answer nếu có
                         if final_answer_part:
-                            # Hiển thị tiêu đề trước
-                            streaming_text += "\n💬 **Medical AI Assessment:**\n"
-                            history[-1][1] = streaming_text
-                            yield "", history, session_state
-                            time.sleep(0.2)
+                            # REMOVED: Không hiển thị tiêu đề Medical AI Assessment nữa
+                            # Kiểm tra xem Medical AI Assessment đã được thêm chưa
+                            # medical_ai_header_exists = "Medical AI Assessment" in streaming_text
+                            
+                            # Hiển thị tiêu đề trước nếu chưa tồn tại
+                            # if not medical_ai_header_exists:
+                            #     streaming_text += "\n💬 **Medical AI Assessment:**\n"
+                            #     history[-1][1] = streaming_text
+                            #     yield "", history, session_state
+                            #     time.sleep(0.2)
                             
                             # Kiểm tra xem có streaming chunks không
                             if "response_chunks" in result and result["response_chunks"]:
@@ -401,7 +836,8 @@ def create_enhanced_chatbot():
                                     time.sleep(0.05)  # Điều chỉnh tốc độ streaming
                             else:
                                 # Lấy nội dung final_answer (bỏ tiêu đề)
-                                final_content = final_answer_part.replace("\n💬 **Medical AI Assessment:**\n", "")
+                                logger.info(f"dont use chunk: {final_answer_part}")
+                                final_content = final_answer_part.replace("\n💬 **Medical AI Assessment:**\n", "").replace("\n💬 **Medical AI Assessment:**", "")
                                 
                                 # Stream từng câu một
                                 sentences = re.split(r'(?<=[.!?])\s+', final_content)
@@ -521,6 +957,9 @@ def create_enhanced_chatbot():
                                 
                                 session_state["conversation_history"] = updated_history
                                 logger.info(f"[FIXED] Updated session with text conversation_history: {len(updated_history)} entries")
+                                
+                                # FIX: Lưu conversation_history vào file cho cả text-only workflow
+                                self._save_conversation_history(session_id, updated_history)
                     else:
                         # Handle text-only system error
                         logger.error(f"Medical AI system failed: {result.get('error', 'Unknown error')}")
@@ -606,6 +1045,13 @@ def create_enhanced_chatbot():
                     logger.info(f"Saving important interaction to long-term memory for user {user_id}")
                     self.memory.save_to_long_term(user_id, session_id, interaction)
                 
+                # Save session history sau khi có response
+                if username and session_id and history:
+                    self.save_session_history(username, session_id, history)
+                
+                # Make sure result is in markdown 
+                return "", history, session_state
+                
             except Exception as e:
                 import traceback
                 logger.error(f"Error processing message: {str(e)}")
@@ -613,255 +1059,289 @@ def create_enhanced_chatbot():
                 error_response = self._create_system_error_response(original_message)  # Use original_message
                 history[-1][1] = error_response
                 yield "", history, session_state
-        def create_enhanced_interface(self):
-            """Tạo giao diện với nhiều tính năng hơn."""
+        
+        def collect_response_parts(self, parts):
+            """Ghép các phần của response thành một chuỗi đầy đủ."""
+            if not parts:
+                return ""
+                
+            return "\n".join(parts)
+        
+        def _create_system_error_response(self, query):
+            """Create an error response for system failures."""
+            error_message = [
+                "❌ **System Error**",
+                "",
+                "I apologize, but I encountered a technical issue while processing your request.",
+                "",
+                "Please try again with:",
+                "- A clearer description",
+                "- A different image (if you uploaded one)",
+                "- Break complex questions into simpler ones",
+                "",
+                "If the problem persists, please contact technical support."
+            ]
+            return "\n".join(error_message)
             
-            # Custom CSS with image support
-            custom_css = """
-            .main-container { 
-                max-width: 1200px; 
-                margin: 0 auto;
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            }
-            .header-section {
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: white;
-                padding: 1.5rem;
-                border-radius: 10px;
-                margin-bottom: 1.5rem;
-                text-align: center;
-            }
-            .chat-container { 
-                height: 600px; 
-                border-radius: 10px;
-                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-                margin-bottom: 1rem;
-                width: 100%;
-            }
-            /* FIXED: Cải thiện hiển thị ảnh trong chat */
-            .chat-container img {
-                max-width: 80% !important;
-                max-height: 400px !important;
-                border-radius: 8px !important;
-                margin: 10px auto !important;
-                display: block !important;
-                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2) !important;
-                border: 1px solid rgba(0, 0, 0, 0.1) !important;
-            }
-            /* Ensure images in message bubble are properly styled */
-            .message img {
-                max-width: 100% !important;
-                height: auto !important;
-                border-radius: 8px !important;
-                margin: 10px 0 !important;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
-            }
-            .upload-container { 
-                border: 2px dashed #4CAF50; 
-                padding: 20px; 
-                text-align: center;
-                border-radius: 10px;
-                background: #f8f9fa;
-                margin-bottom: 1rem;
-            }
-            .chat-input-container {
-                display: flex;
-                width: 100%;
-                margin: 0.5rem 0;
-                gap: 0.5rem;
-            }
-            .tab-container {
-                margin-top: 1rem;
-                border-radius: 10px;
-                overflow: hidden;
-                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-            }
-            .button-row {
-                display: flex;
-                gap: 0.5rem;
-                margin: 0.5rem 0;
-            }
-            """
+        def save_session_history(self, username, session_id, history):
+            """Save chat history to disk"""
+            if not username or not session_id or not history:
+                logger.warning(f"Missing data for save_session_history: username={bool(username)}, session_id={bool(session_id)}, history={len(history) if history else 0}")
+                return False
+                
+            # Ensure history directory exists
+            history_dir = os.path.join("sessions", "history")
+            os.makedirs(history_dir, exist_ok=True)
             
-            with gr.Blocks(
-                title=self.app_config.get("app.title", "Medical AI Assistant"),
-                theme=gr.themes.Soft() if self.app_config.get("ui.theme") == "soft" else gr.themes.Default(),
-                css=custom_css
-            ) as interface:
-                
-                # State management
-                session_state = gr.State({})
-                
-                # Header
-                with gr.Row(elem_classes=["header-section"]):
-                    gr.Markdown(f"""
-                    # 🏥 {self.app_config.get("app.title", "Medical AI Assistant")}
-                    ### {self.app_config.get("app.description", "AI system for endoscopy image analysis and medical consultation")}
+            history_file = os.path.join(history_dir, f"{session_id}.json")
+            
+            # Log the history we're about to save
+            logger.info(f"[SAVE] Saving {len(history)} messages to {history_file}")
+            
+            try:
+                with open(history_file, "w") as f:
+                    json.dump(history, f, ensure_ascii=False, indent=2)
                     
-                    **🎯 Key Features:**
-                    - 🧠 **LLaVA-Med Integration**: Specialized medical AI
-                    - 🔍 **Accurate Analysis**: Multi-agent AI with high reliability
-                    - 💬 **Intelligent Consultation**: Support for both images and text-only queries
-                    - 📊 **Streaming Response**: Real-time feedback
-                    """)
+                logger.info(f"[SAVE] Successfully saved {len(history)} messages for session {session_id}")
+                return True
+            except Exception as e:
+                logger.error(f"Error saving session history: {str(e)}")
+                return False
                 
-                with gr.Row():
-                    # Main chat interface in a centered column
-                    with gr.Column(scale=1, min_width=800):
-                        # Chat container - FIXED: Enable HTML rendering for images
-                        chatbot = gr.Chatbot(
-                            label="💬 Conversation with AI",
-                            height=self.app_config.get("ui.chat_height", 650),
-                            show_copy_button=True,
-                            elem_classes=["chat-container"],
-                            layout="bubble",
-                            render_markdown=True,
-                            sanitize_html=False,  # FIXED: Allow HTML images
-                            value=[["", "👋 **Hello! I am the Medical AI Assistant, ready to help you analyze medical images or answer any health-related questions. 📸 You can upload endoscopy or X-ray images for me to analyze.💬 Or you can simply ask medical questions without providing any images..\n\n💬 Or you can ask medical questions directly without needing to upload any images."]]
-                        )
-                        
-                        # Input and buttons in a clean layout
-                        with gr.Row(elem_classes=["chat-input-container"]):
-                            msg_input = gr.Textbox(
-                                placeholder="💭 Describe symptoms or ask questions about the image...",
-                                label="Your message",
-                                scale=5,
-                                lines=2
-                            )
-                            with gr.Column(scale=1, elem_classes=["button-row"]):
-                                send_btn = gr.Button("📤 Send", variant="primary", size="lg")
-                                clear_btn = gr.Button("🗑️ Clear", variant="stop", size="lg")
-                        
-                        # Tabs for image upload and results
-                        tabs = gr.Tabs(elem_classes=["tab-container"])
-                        with tabs:
-                            with gr.TabItem("🖼️ Upload Image"):
-                                # Advanced image upload
-                                image_input = gr.Image(
-                                    label="Select endoscopy image, X-ray, or other medical image",
-                                    type="filepath",
-                                    elem_classes=["upload-container"]
-                                )
-                                
-                                gr.Markdown("""
-                                **Note:** 
-                                - Supported formats: JPG, PNG, DICOM
-                                - Maximum size: 10MB
-                                - Ensure clear images for best results
-                                - **Detection results will appear directly in chat**
-                                """)
-                            
-                            with gr.TabItem("📊 Detection Results"):
-                                result_image = gr.Image(
-                                    label="Polyp detection results",
-                                    type="filepath",
-                                    interactive=False
-                                )
-                                
-                                show_latest_result_btn = gr.Button("🔄 Show latest results", variant="secondary")
+        def load_previous_session(self, username, session_id):
+            """Load chat history from a previous session"""
+            if not username or not session_id:
+                logger.warning(f"Missing username or session_id in load_previous_session")
+                return []
                 
-                # Hidden state for username (required for functions)
-                username_input = gr.Textbox(value="Patient", visible=False)
-                user_info = gr.Textbox(value="", visible=False)
+            # Check for session messages
+            history_dir = os.path.join("sessions", "history")
+            os.makedirs(history_dir, exist_ok=True)
+            
+            history_file = os.path.join(history_dir, f"{session_id}.json")
+            logger.info(f"[LOAD] Checking for history file: {history_file}")
+            
+            if not os.path.exists(history_file):
+                logger.info(f"No history file found for session {session_id}")
+                # Fallback to memory system if available
+                try:
+                    user_id = self.generate_user_id(username)
+                    if hasattr(self, "memory") and hasattr(self.memory, "load_previous_session"):
+                        memory_history = self.memory.load_previous_session(user_id, session_id)
+                        if memory_history:
+                            logger.info(f"Found {len(memory_history)} messages in memory system")
+                            return memory_history
+                except Exception as e:
+                    logger.error(f"Error checking memory system: {e}")
+                return []
                 
-                # Streaming format wrapper
-                streaming_format = gr.Markdown(value="", elem_id="streaming_output") 
-                
-                def safe_process_message_streaming(message, image, history, username, user_info, state):
-                    """Safe wrapper for process_message with streaming."""
-                    start_time = time.time()
+            try:
+                with open(history_file, "r") as f:
+                    logger.info(f"[LOAD] Reading history file for session {session_id}")
+                    history = json.load(f)
+                    # FIX: Đảm bảo rằng history đọc được là hợp lệ
+                    if not isinstance(history, list):
+                        logger.error(f"Invalid history format in {history_file}, expected list but got {type(history)}")
+                        return []
                     
-                    # Log the current state
-                    logger.info(f"[APP] Processing message from {username}: '{message[:50]}...' (if longer)")
-                    
-                    # Debug session state
-                    logger.info(f"[APP] Current session state keys: {list(state.keys())}")
-                    logger.info(f"[APP] Has session_id: {bool('session_id' in state)}")
-                    
-                    if "conversation_history" in state:
-                        logger.info(f"[APP] Current session state has conversation_history with {len(state['conversation_history'])} entries")
-                        if len(state['conversation_history']) > 0:
-                            last_entry = state['conversation_history'][-1]
-                            logger.info(f"[APP] Last entry: {last_entry.get('query', 'Unknown')[:30]}... - {last_entry.get('timestamp', 'No timestamp')}")
-                    else:
-                        logger.info("[APP] No conversation_history in session state yet")
-                        
-                    # Process the message
-                    try:
-                        # Update user info in state
-                        if "medical_context" not in state:
-                            state["medical_context"] = {}
-                        state["medical_context"]["user_info"] = user_info
-                        
-                        # Initialize updated_state to avoid UnboundLocalError
-                        updated_state = state.copy()
-                        
-                        # Use streaming version - always pass the SAME state object to ensure session consistency
-                        for msg, updated_history, returned_state in self.process_message_streaming(message, image, history, username, state):
-                            # Merge returned state back into our state to maintain consistency
-                            if returned_state is not None:
-                                for key, value in returned_state.items():
-                                    state[key] = value
-                                # Ensure session_id is preserved
-                                if "session_id" in returned_state:
-                                    logger.info(f"[APP] Preserving session_id: {returned_state['session_id']}")
-                            
-                            # Log session ID after each iteration
-                            if "session_id" in state:
-                                logger.info(f"[APP] Current session_id after iteration: {state['session_id']}")
-                            
-                            yield msg, updated_history, state, None
-                        
-                        # Check for visualization result
-                        if "last_visualization" in state:
-                            yield msg, updated_history, state, state.get("last_visualization")
-                            
-                    except Exception as e:
-                        logger.error(f"Error in safe_process_message_streaming: {str(e)}", exc_info=True)
-                        error_msg = f"❌ Processing error: {str(e)}"
-                        if history:
-                            history[-1][1] = error_msg
+                    # FIX: Lọc các tin nhắn không hợp lệ
+                    valid_history = []
+                    for entry in history:
+                        if isinstance(entry, list) and len(entry) >= 2:
+                            valid_history.append(entry)
                         else:
-                            history.append([message, error_msg])
-                        yield "", history, state, None
+                            logger.warning(f"Skipping invalid history entry: {entry}")
+                    
+                    logger.info(f"[LOAD] Loaded {len(valid_history)} valid messages from session {session_id}")
+                    return valid_history
+            except Exception as e:
+                logger.error(f"Error loading session history: {str(e)}")
+                return []
+        
+        def get_user_sessions(self, username: str) -> List[Dict[str, Any]]:
+            """Lấy danh sách các phiên của người dùng."""
+            if not username:
+                return []
+                
+            # Lấy user ID từ username
+            user_id = self.generate_user_id(username)
+            
+            # Danh sách kết quả session
+            sessions = {}
+            
+            # Thử lấy session từ bộ nhớ dài hạn (nếu có)
+            try:
+                if hasattr(self, "memory") and hasattr(self.memory, "get_user_sessions"):
+                    memory_sessions = self.memory.get_user_sessions(user_id)
+                    # Thêm các session từ bộ nhớ dài hạn
+                    for session in memory_sessions:
+                        session_id = session.get("session_id")
+                        if session_id:
+                            sessions[session_id] = session
+            except Exception as e:
+                logger.error(f"Error getting sessions from memory: {e}")
+            
+            # Thử lấy persistent session ID (nếu có)
+            persistent_session = self._load_persistent_session_id(username)
+            
+            # Kiểm tra session history cho persistent session
+            history_dir = os.path.join("sessions", "history")
+            os.makedirs(history_dir, exist_ok=True)
+            
+            # Thêm các session từ thư mục history
+            try:
+                for file_name in os.listdir(history_dir):
+                    if file_name.endswith(".json"):
+                        session_id = file_name.replace(".json", "")
+                        if session_id not in sessions:
+                            history_file = os.path.join(history_dir, file_name)
+                            try:
+                                with open(history_file, "r") as f:
+                                    history = json.load(f)
+                                    msg_count = len(history)
+                                    
+                                session = {
+                                    "session_id": session_id,
+                                    "user_id": user_id, 
+                                    "timestamp": os.path.getmtime(history_file),
+                                    "messages": msg_count,
+                                    "display_name": f"Session {session_id[:6]}... ({msg_count} messages)"
+                                }
+                                sessions[session_id] = session
+                            except Exception as e:
+                                logger.error(f"Error reading history file {file_name}: {e}")
+            except Exception as e:
+                logger.error(f"Error listing history directory: {e}")
+            
+            # Thêm persistent session nếu có và chưa được thêm
+            if persistent_session and persistent_session not in sessions:
+                # Tìm session history file
+                history_file = os.path.join(history_dir, f"{persistent_session}.json")
+                
+                if os.path.exists(history_file):
+                    # Tạo session metadata từ file
+                    try:
+                        with open(history_file, "r") as f:
+                            history = json.load(f)
+                            msg_count = len(history)
+                            
+                        session = {
+                            "session_id": persistent_session,
+                            "user_id": user_id,
+                            "timestamp": time.time(),
+                            "messages": msg_count,
+                            "display_name": f"Session {persistent_session[:6]}... ({msg_count} messages)",
+                            "is_current": True
+                        }
+                        sessions[persistent_session] = session
+                    except Exception as e:
+                        logger.error(f"Error loading persistent session history: {e}")
+            
+            # Chuyển đổi dict thành list và sắp xếp theo thời gian
+            result = list(sessions.values())
+            result.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
+            
+            return result
+            
+        def _load_persistent_session_id(self, username):
+            """Load persistent session ID from disk"""
+            if not username:
+                return None
+                
+            session_file = os.path.join("sessions", f"{username}.session")
+            
+            if not os.path.exists(session_file):
+                return None
+                
+            try:
+                with open(session_file, "r") as f:
+                    data = json.load(f)
+                    logger.info(f"Loaded persistent session ID: {data.get('session_id')}")
+                    return data.get("session_id")
+            except Exception as e:
+                logger.error(f"Error loading session ID: {e}")
+                return None
+                
+        def _save_persistent_session_id(self, username, session_id):
+            """Save persistent session ID to disk"""
+            if not username or not session_id:
+                return False
+                
+            # Ensure sessions directory exists
+            os.makedirs("sessions", exist_ok=True)
+            
+            session_file = os.path.join("sessions", f"{username}.session")
+            
+            try:
+                # Save both session ID and creation timestamp
+                data = {
+                    "session_id": session_id,
+                    "created_at": datetime.now().isoformat(),
+                    "username": username
+                }
+                
+                with open(session_file, "w") as f:
+                    json.dump(data, f)
+                    
+                logger.info(f"Saved persistent session ID: {session_id}")
+                return True
+            except Exception as e:
+                logger.error(f"Error saving session ID: {e}")
+                return False
 
-                def show_latest_visualization(state):
-                    """Show the most recent detection visualization"""
-                    try:
-                        if "last_visualization" in state and state["last_visualization"]:
-                            return state["last_visualization"]
-                        else:
-                            return None
-                    except Exception as e:
-                        logger.error(f"Error showing visualization: {str(e)}")
-                        return None
+        def _load_conversation_history(self, session_id: str) -> List[Dict[str, Any]]:
+            """Load conversation history từ file lưu trữ."""
+            if not session_id:
+                return []
                 
-                # Connect all events với streaming
-                send_btn.click(
-                    safe_process_message_streaming,
-                    inputs=[msg_input, image_input, chatbot, username_input, user_info, session_state],
-                    outputs=[msg_input, chatbot, session_state, result_image]
-                )
-                
-                msg_input.submit(
-                    safe_process_message_streaming,
-                    inputs=[msg_input, image_input, chatbot, username_input, user_info, session_state],
-                    outputs=[msg_input, chatbot, session_state, result_image]
-                )
-                
-                show_latest_result_btn.click(
-                    show_latest_visualization,
-                    inputs=[session_state],
-                    outputs=[result_image]
-                ).then(
-                    lambda: gr.update(selected=1),  # Luôn chuyển sang tab kết quả
-                    outputs=[tabs]
-                )
-                
-                clear_btn.click(lambda: [], outputs=[chatbot])
+            # Đường dẫn file lưu trữ conversation history
+            history_dir = os.path.join("sessions", "conversation_history")
+            os.makedirs(history_dir, exist_ok=True)
             
-            return interface
-    
+            history_file = os.path.join(history_dir, f"{session_id}.json")
+            logger.info(f"[LOAD] Checking for conversation history file: {history_file}")
+            
+            if not os.path.exists(history_file):
+                logger.info(f"No conversation history file found for session {session_id}")
+                return []
+                
+            try:
+                with open(history_file, "r") as f:
+                    logger.info(f"[LOAD] Reading conversation history file for session {session_id}")
+                    conversation_history = json.load(f)
+                    
+                    # Validate format
+                    if not isinstance(conversation_history, list):
+                        logger.error(f"Invalid conversation history format, expected list but got {type(conversation_history)}")
+                        return []
+                        
+                    logger.info(f"[LOAD] Loaded {len(conversation_history)} entries from conversation history")
+                    return conversation_history
+            except Exception as e:
+                logger.error(f"Error loading conversation history: {str(e)}")
+                return []
+
+        def _save_conversation_history(self, session_id: str, conversation_history: List[Dict[str, Any]]) -> bool:
+            """Save conversation history to file."""
+            if not session_id or not conversation_history:
+                return False
+                
+            # Ensure directory exists
+            history_dir = os.path.join("sessions", "conversation_history")
+            os.makedirs(history_dir, exist_ok=True)
+            
+            history_file = os.path.join(history_dir, f"{session_id}.json")
+            
+            try:
+                with open(history_file, "w") as f:
+                    json.dump(conversation_history, f, ensure_ascii=False, indent=2)
+                    
+                logger.info(f"[SAVE] Saved {len(conversation_history)} entries to conversation history")
+                return True
+            except Exception as e:
+                logger.error(f"Error saving conversation history: {str(e)}")
+                return False
+
     # Create and return enhanced chatbot
     return EnhancedMedicalAIChatbot(config)
 
@@ -874,8 +1354,20 @@ def main():
     parser.add_argument("--share", action="store_true", help="Create shareable link")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     parser.add_argument("--device", choices=["cuda", "cpu"], help="Device to use")
+    parser.add_argument("--install-faiss-avx2", action="store_true", help="Install FAISS with AVX2 support and exit")
     
     args = parser.parse_args()
+    
+    # Install FAISS with AVX2 support if requested
+    if args.install_faiss_avx2:
+        print("🔄 Installing FAISS with AVX2 support...")
+        try:
+            import subprocess
+            subprocess.run([sys.executable, "-m", "pip", "install", "faiss-gpu" if args.device=="cuda" else "faiss-cpu"], check=True)
+            print("✅ FAISS installation completed. Please restart the application.")
+        except Exception as e:
+            print(f"❌ FAISS installation failed: {e}")
+        return
     
     # Load config
     config = MedicalAIConfig(args.config)

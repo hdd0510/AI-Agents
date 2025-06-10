@@ -442,64 +442,6 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
             logger.info(f"  - TIMESTAMP: {entry.get('timestamp', 'None')}")
         logger.info("=" * 50)
     
-    # Special handling for "what did I say" meta-queries
-    if current_query and current_query.lower() in ["what did i say", "what did i ask"]:
-        logger.info("[META-QUERY] Processing 'what did I say' type question")
-        
-        # Extract only actual user messages, excluding system messages, pending, and meta-queries
-        user_messages = []
-        for entry in conversation_history:
-            # Skip system messages, pending entries and meta queries
-            if (not entry.get("is_system", False) and 
-                not entry.get("is_pending", False) and 
-                not entry.get("is_meta", False) and 
-                entry.get("query", "").strip()):
-                
-                user_query = entry.get("query", "").strip()
-                # Also skip the current query itself
-                if user_query.lower() != current_query.lower():
-                    user_messages.append(user_query)
-        
-        logger.info(f"[META-QUERY] Found {len(user_messages)} user messages: {user_messages}")
-        
-        if not user_messages:
-            response = "You haven't asked any questions yet."
-        elif len(user_messages) == 1:
-            response = f"You asked: \"{user_messages[0]}\""
-        else:
-            # Return the most recent question (excluding the current meta-query)
-            response = f"You asked: \"{user_messages[-1]}\""
-        
-        logger.info(f"[META-QUERY] Response: {response}")
-        
-        # Create final result
-        final_result = {
-            "task_type": "meta_query",
-            "success": True,
-            "session_id": state.get("session_id", ""),
-            "query": current_query,
-            "timestamp": time.time(),
-            "response": response,
-            "processing_time": processing_time,
-            "final_answer": response
-        }
-        
-        # Add the current interaction to conversation history
-        conversation_history.append({
-            "query": current_query,
-            "response": response,
-            "timestamp": time.time(),
-            "is_meta": True  # Mark as meta-query
-        })
-        
-        logger.info(f"[META-QUERY] Added meta-query to history. Now has {len(conversation_history)} entries")
-        
-        return {
-            **state, 
-            "final_result": final_result,
-            "conversation_history": conversation_history
-        }
-    
     # Check if it's a general (non-medical) query
     is_general_query = "general_query" in state.get("required_tasks", [])
     # is_text_only = state.get("is_text_only", False)

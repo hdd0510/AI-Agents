@@ -171,7 +171,7 @@ class BaseAgent(ABC):
             task_input = self._extract_task_input(state)
             result = self._run_react_loop(task_input)
             agent_out = self._format_agent_result(result)
-            print(f"🔧 DEBUG: Agent {self.name} result: {agent_out}")
+            print(f"🔧 DEBUG: agent_out {agent_out}")
             return {**state, **agent_out}
         except Exception as e:
             err = f"Error in {self.name}: {e}\n{traceback.format_exc()}"

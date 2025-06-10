@@ -186,8 +186,11 @@ Begin Step 1 now:"""
         """Execute a step with validation."""
         try:
             if action == "yolo_detection":
+                print(f"🔧 DEBUG: task_input {task_input}")
                 image_path = task_input.get("image_path", "")
+                print(f"🔧 DEBUG: image_path {image_path}")
                 result = self.detector_tool._run(image_path=image_path, conf_thresh=0.25)
+                print(f"🔧 DEBUG: result {result}")
                 
             elif action == "visualize_detections":
                 image_path = task_input.get("image_path", "")

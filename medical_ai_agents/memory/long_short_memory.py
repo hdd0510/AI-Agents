@@ -268,6 +268,118 @@ class LongShortTermMemory:
         
         return conversations
 
+    def get_user_sessions(self, user_id: str) -> List[Dict[str, Any]]:
+        """Lấy danh sách các session của người dùng từ bộ nhớ dài hạn."""
+        logger = logging.getLogger("memory.sessions")
+        user_dir = os.path.join(self.storage_path, "users", user_id)
+        history_file = os.path.join(user_dir, "history.jsonl")
+        
+        if not os.path.exists(history_file):
+            logger.info(f"No history file found for user {user_id}")
+            return []
+            
+        # Đọc tất cả lịch sử và tổng hợp theo session_id
+        sessions = {}
+        try:
+            with open(history_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    try:
+                        interaction = json.loads(line)
+                        session_id = interaction.get("session_id")
+                        timestamp = interaction.get("timestamp", interaction.get("saved_at", 0))
+                        
+                        if session_id:
+                            if session_id not in sessions:
+                                sessions[session_id] = {
+                                    "session_id": session_id,
+                                    "first_timestamp": timestamp,
+                                    "last_timestamp": timestamp,
+                                    "interaction_count": 0,
+                                    "first_query": interaction.get("query", "Unknown"),
+                                    "has_polyp": False
+                                }
+                            
+                            # Cập nhật thông tin session
+                            session = sessions[session_id]
+                            session["interaction_count"] += 1
+                            
+                            # Cập nhật timestamp mới nhất
+                            if timestamp > session["last_timestamp"]:
+                                session["last_timestamp"] = timestamp
+                            
+                            # Cập nhật timestamp cũ nhất
+                            if timestamp < session["first_timestamp"]:
+                                session["first_timestamp"] = timestamp
+                            
+                            # Kiểm tra nếu có polyp
+                            if interaction.get("polyp_count", 0) > 0 or (
+                                interaction.get("analysis") and 
+                                interaction.get("analysis", {}).get("polyp_count", 0) > 0
+                            ):
+                                session["has_polyp"] = True
+                    except Exception as e:
+                        logger.error(f"Error processing interaction: {str(e)}")
+                        continue
+            
+            # Chuyển thành list và sắp xếp theo thời gian gần nhất
+            session_list = list(sessions.values())
+            session_list.sort(key=lambda x: x["last_timestamp"], reverse=True)
+            
+            # Format datetime
+            for session in session_list:
+                first_time = datetime.datetime.fromtimestamp(session["first_timestamp"])
+                last_time = datetime.datetime.fromtimestamp(session["last_timestamp"])
+                
+                session["first_time"] = first_time.strftime("%Y-%m-%d %H:%M")
+                session["last_time"] = last_time.strftime("%Y-%m-%d %H:%M")
+                
+                # Tạo tiêu đề hiển thị cho session
+                polyp_indicator = "🔴" if session["has_polyp"] else "⚪"
+                truncated_query = (session["first_query"][:30] + "...") if len(session["first_query"]) > 30 else session["first_query"]
+                session["display_name"] = f"{polyp_indicator} {session['last_time']} - {truncated_query} ({session['interaction_count']} msgs)"
+            
+            return session_list
+            
+        except Exception as e:
+            logger.error(f"Error reading user sessions: {str(e)}")
+            return []
+    
+    def load_previous_session(self, user_id: str, session_id: str) -> List[List[str]]:
+        """Tải lại nội dung một session cũ để hiển thị trong chatbot."""
+        logger = logging.getLogger("memory.load_session")
+        user_dir = os.path.join(self.storage_path, "users", user_id)
+        history_file = os.path.join(user_dir, "history.jsonl")
+        
+        if not os.path.exists(history_file):
+            logger.info(f"No history file found for user {user_id}")
+            return []
+        
+        chat_history = []
+        try:
+            with open(history_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    try:
+                        interaction = json.loads(line)
+                        if interaction.get("session_id") == session_id:
+                            query = interaction.get("query", "")
+                            response = interaction.get("response", "")
+                            
+                            if query:
+                                chat_history.append([query, response])
+                    except Exception as e:
+                        logger.error(f"Error reading interaction: {str(e)}")
+                        continue
+            
+            # Sắp xếp theo thời gian
+            chat_history.sort(key=lambda x: x.get("timestamp", 0) if isinstance(x, dict) else 0)
+            
+            logger.info(f"Loaded {len(chat_history)} messages from session {session_id}")
+            return chat_history
+            
+        except Exception as e:
+            logger.error(f"Error loading previous session: {str(e)}")
+            return []
+
 class MedicalAIChatbot:
     """Medical AI Chatbot với Gradio interface."""
     
@@ -550,6 +662,16 @@ class MedicalAIChatbot:
         
         return "\n".join(stats)
     
+    def get_user_sessions(self, username: str) -> List[Dict[str, Any]]:
+        """Lấy danh sách các phiên của người dùng."""
+        user_id = self.generate_user_id(username)
+        return self.memory.get_user_sessions(user_id)
+    
+    def load_previous_session(self, username: str, session_id: str) -> List[List[str]]:
+        """Tải lại nội dung một phiên trước đó."""
+        user_id = self.generate_user_id(username)
+        return self.memory.load_previous_session(user_id, session_id)
+    
     def create_interface(self) -> gr.Blocks:
         """Create Gradio interface with fixed image display."""
         
@@ -567,6 +689,14 @@ class MedicalAIChatbot:
                 border-radius: 8px;
                 margin: 10px 0;
                 box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }
+            .session-dropdown {
+                margin-bottom: 10px;
+            }
+            .session-controls {
+                display: flex;
+                margin-bottom: 10px;
+                gap: 5px;
             }
             """
         ) as interface:
@@ -627,12 +757,26 @@ class MedicalAIChatbot:
                     
                     stats_btn = gr.Button("View my statistics", variant="secondary")
                     
+                    # Phần hiển thị phiên trước đó
+                    gr.Markdown("### 🕒 Previous Sessions")
+                    
+                    # Dropdown để hiển thị các phiên trước và nút tải
+                    session_dropdown = gr.Dropdown(
+                        label="Select a previous session", 
+                        choices=[], 
+                        interactive=True,
+                        elem_classes=["session-dropdown"]
+                    )
+                    
+                    with gr.Row(elem_classes=["session-controls"]):
+                        refresh_sessions_btn = gr.Button("🔄 Refresh List", size="sm")
+                        load_session_btn = gr.Button("📂 Load Session", size="sm", variant="primary")
+                    
                     # Quick actions
                     gr.Markdown("### ⚡ Quick Actions")
                     
                     with gr.Column():
                         quick_analysis_btn = gr.Button("🔍 Quick Analysis", size="sm")
-                        history_btn = gr.Button("📜 View History", size="sm") 
                         clear_btn = gr.Button("🗑️ Clear Conversation", size="sm")
                     
                     # Memory info
@@ -651,10 +795,45 @@ class MedicalAIChatbot:
                 return self.get_user_stats(username)
             
             def clear_chat():
-                return []
+                # FIXED: Reset session_state và trả về cả 3 output: [], [], {}
+                if "session_id" in session_state:
+                    # Giữ lại session_id
+                    session_id = session_state.get("session_id")
+                    session_state.clear()
+                    session_state["session_id"] = session_id
+                else:
+                    session_state.clear()
+                
+                # Xóa nội dung chat
+                empty_history = []
+                empty_image = None
+                
+                # Log clear chat action
+                logger.info("Clear chat requested, resetting chat history and session state")
+                
+                # Trả về empty chatbot và session state
+                return empty_history, session_state, empty_image
             
             def quick_analysis_prompt():
                 return "Please analyze this image and tell me if there are any polyps detected?"
+                
+            def refresh_sessions(username):
+                sessions = self.get_user_sessions(username)
+                if not sessions:
+                    return [], gr.update(visible=False), "No previous sessions found for this user."
+                else:
+                    choices = [(s["display_name"], s["session_id"]) for s in sessions]
+                    return choices, gr.update(visible=True), f"Found {len(choices)} previous sessions."
+            
+            def load_session(session_id, username):
+                if not session_id:
+                    return [], "Please select a session first."
+                
+                history = self.load_previous_session(username, session_id)
+                if not history:
+                    return [], "No conversations found in this session."
+                
+                return history, f"Loaded session: {session_id}"
             
             # Connect events
             send_btn.click(
@@ -675,14 +854,35 @@ class MedicalAIChatbot:
                 outputs=[stats_display]
             )
             
+            # FIXED: Kết nối lại clear_btn với đầy đủ outputs
             clear_btn.click(
                 clear_chat,
-                outputs=[chatbot]
+                outputs=[chatbot, session_state, image_input]
             )
             
             quick_analysis_btn.click(
                 quick_analysis_prompt,
                 outputs=[msg_input]
+            )
+            
+            # Kết nối sự kiện cho phần session
+            refresh_sessions_btn.click(
+                refresh_sessions,
+                inputs=[username_input],
+                outputs=[session_dropdown, load_session_btn, stats_display]
+            )
+            
+            load_session_btn.click(
+                load_session,
+                inputs=[session_dropdown, username_input],
+                outputs=[chatbot, stats_display]
+            )
+            
+            # Tự động làm mới danh sách khi đổi tên người dùng
+            username_input.change(
+                refresh_sessions,
+                inputs=[username_input],
+                outputs=[session_dropdown, load_session_btn, stats_display]
             )
         
         return interface

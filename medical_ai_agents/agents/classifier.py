@@ -379,7 +379,7 @@ Choose your adaptive strategy and proceed:"""
         # LLM-based synthesis - adaptive based on confidence level
         if is_low_confidence and image_path:
             # Enhanced prompt for low confidence scenarios with image reference
-            prompt = f"""Bạn là chuyên gia nội soi. Đây là kết quả phân loại {self.classifier_type} với ĐỘ TIN CẬY THẤP.
+            prompt = f"""Bạn là chuyên gia nội soi. Đây là kết quả phân loại {self.classifier_type} với ĐỘ TIN CẬY THẤP. Hãy xem xét ảnh để tư vấn lại kết quả (có thể là class loại khác) nếu cần hoặc thông báo không chắc chắn cần kiểm định lại.
 
 Thông tin ảnh:
 - Đường dẫn ảnh: {image_path}
@@ -408,6 +408,8 @@ QUAN TRỌNG: Hãy nêu rõ đây là đánh giá với độ tin cậy thấp v
 - Mô tả: {description}
 
 Hãy đưa ra nhận định lâm sàng, ý nghĩa kết quả và khuyến nghị nếu có."""
+        
+        prompt += "Với những class tiếng việt không dấu thì hãy dịch sang tiếng việt trước rồi chuyển đổi thành tiếng anh nếu cần."
 
         try:
             llm_answer = self.llm.invoke([{"role": "user", "content": prompt}]).content.strip()

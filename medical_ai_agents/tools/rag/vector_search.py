@@ -17,6 +17,7 @@ from pathlib import Path
 
 from medical_ai_agents.tools.base_tools import BaseTool
 
+
 class VectorSearchTool(BaseTool):
     """Tool tìm kiếm semantic trong knowledge base."""
     
