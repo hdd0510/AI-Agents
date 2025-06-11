@@ -92,16 +92,13 @@ ADAPTIVE STRATEGIES:
 - Validation approach for uncertain cases
 - Thorough approach for complex images
 
-STRICT REACT FORMAT:
-Every step MUST follow this exact format:
-Thought: [your reasoning]
-Action: [tool name or "Final Answer"]
-Action Input: ["image_path": "{{path_to_image}}"]
+EXAMPLES:
+Thought: "Your reasoning"
+Action: tool_name
+Action Input: {{"image_path": "path"}}
 
-FINAL STEP FORMAT:
-You MUST end with EXACTLY this format (use Final Answer with capital letters):
-
-Thought: [your final analysis]
+If this is enough to conclude, you just return the Final Answer action like this.
+Thought: "Your analysis"
 Action: Final Answer
 Action Input: {{"answer": {{"class_name": "[class]", "confidence": "[percentage]", "explanation": "[reason]"}}}}
 
@@ -624,7 +621,7 @@ Image Information (base64 string only, not actual image):
             
             # Parse response
             t, a, inp = self._parse_llm_response(resp)
-            print(f"🔧 DEBUG: t {i} {t[:50] if t else 'None'}")
+            print(f"🔧 DEBUG: t {i} {t[:] if t else 'None'}")
             print(f"🔧 DEBUG: a {i} {a}")
             print(f"🔧 DEBUG: inp {i} {inp}")
             

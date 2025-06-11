@@ -17,7 +17,7 @@ from medical_ai_agents.agents.classifier import ClassifierAgent
 from medical_ai_agents.agents.vqa import VQAAgent
 from medical_ai_agents.agents.rag import RAGAgent
 from medical_ai_agents.graph.nodes import (
-    task_analyzer, result_synthesizer
+    task_analyzer, result_synthesizer, task_completion_wrapper
 )
 from medical_ai_agents.graph.routers import (
     task_router, post_detector_router, 
@@ -72,24 +72,25 @@ def create_medical_ai_graph(config: MedicalGraphConfig):
     logger.info("Creating StateGraph...")
     workflow = StateGraph(SystemState)
     
-    # Add nodes
+    # Add nodes - MODIFIED with task completion wrappers
     workflow.add_node("task_analyzer", lambda state: task_analyzer(state, llm))
-    workflow.add_node("detector", detector_agent)
-    workflow.add_node("rag", rag_agent)
-    workflow.add_node("modality_classifier", modality_classifier_agent)
-    workflow.add_node("region_classifier", region_classifier_agent)
-    workflow.add_node("vqa", vqa_agent)
+    # Add with task completion wrapper for proper state management
+    workflow.add_node("detector", task_completion_wrapper(detector_agent, "polyp_detection"))
+    workflow.add_node("rag", task_completion_wrapper(rag_agent, "document_qa"))
+    workflow.add_node("modality_classifier", task_completion_wrapper(modality_classifier_agent, "modality_classification"))
+    workflow.add_node("region_classifier", task_completion_wrapper(region_classifier_agent, "region_classification"))
+    workflow.add_node("vqa", task_completion_wrapper(vqa_agent, "medical_qa"))
     workflow.add_node("synthesizer", lambda state: result_synthesizer(state, llm))
     
     # Add edges with multi-task routing
     workflow.set_entry_point("task_analyzer")
     
-    # conditional edges
+    # conditional edges with improved logging
     workflow.add_conditional_edges(
         "task_analyzer",
         task_router,
         {
-            "detector": "detector",
+            "detector": "detector", 
             "modality_classifier": "modality_classifier",
             "region_classifier": "region_classifier",
             "vqa": "vqa",
@@ -102,7 +103,8 @@ def create_medical_ai_graph(config: MedicalGraphConfig):
         "rag",
         post_rag_router,
         {
-            "vqa": "vqa"
+            "vqa": "vqa",
+            "synthesizer": "synthesizer"
         }
     )
     
@@ -118,7 +120,7 @@ def create_medical_ai_graph(config: MedicalGraphConfig):
         "detector",
         post_detector_router,
         {
-            "modality_classifier": "modality_classifier",
+            "modality_classifier": "modality_classifier", 
             "region_classifier": "region_classifier",
             "vqa": "vqa",
             "synthesizer": "synthesizer"
@@ -131,7 +133,8 @@ def create_medical_ai_graph(config: MedicalGraphConfig):
         {
             "region_classifier": "region_classifier",
             "vqa": "vqa",
-            "synthesizer": "synthesizer"
+            "synthesizer": "synthesizer",
+            "detector": "detector"  # Added to handle special case when polyp_detection isn't completed
         }
     )
     
@@ -140,7 +143,9 @@ def create_medical_ai_graph(config: MedicalGraphConfig):
         post_region_router,
         {
             "vqa": "vqa",
-            "synthesizer": "synthesizer"
+            "synthesizer": "synthesizer",
+            "detector": "detector",  # Added to handle special case when polyp_detection isn't completed
+            "modality_classifier": "modality_classifier"  # Another backup path
         }
     )
     

@@ -281,7 +281,7 @@ def create_enhanced_chatbot():
                         user_id = self.generate_user_id(username)
                         new_state["user_id"] = user_id
                         
-                        # Tải conversation_history
+                        # CRITICAL FIX: Tải conversation_history và đảm bảo nó được lưu vào session state
                         conversation_history = self._load_conversation_history(session_id)
                         if conversation_history:
                             new_state["conversation_history"] = conversation_history
@@ -299,6 +299,9 @@ def create_enhanced_chatbot():
                                         ui_history.append([query, response])
                                 logger.info(f"Auto-sync: Created {len(ui_history)} UI history entries from conversation_history")
                             
+                            # CRITICAL FIX: Ghi log để kiểm tra conversation_history đã được load
+                            logger.info(f"Auto-sync: Memory setup complete. Session has conversation_history with {len(conversation_history)} entries")
+                            
                             return ui_history, new_state
                     
                     # Nếu không tìm thấy session hoặc history
@@ -312,6 +315,50 @@ def create_enhanced_chatbot():
                             file_name = file_name[:12] + "..."
                         return f"✅ {file_name}"
                     return "Chưa có ảnh"
+
+                # CRITICAL FIX: Function to load a session that properly updates the session state with conversation history
+                def load_session_and_update_state(username, session_id, old_state):
+                    if not session_id or not username:
+                        logger.warning(f"Missing username or session_id in load_session_and_update_state")
+                        return [], old_state
+
+                    # Create new state based on old state
+                    new_state = old_state.copy() if old_state else {}
+                    
+                    # Update session_id in state
+                    new_state["session_id"] = session_id
+                    
+                    # Generate user_id
+                    user_id = self.generate_user_id(username)
+                    new_state["user_id"] = user_id
+                    
+                    # CRITICAL: Load conversation history into session state
+                    conversation_history = self._load_conversation_history(session_id)
+                    if conversation_history:
+                        new_state["conversation_history"] = conversation_history
+                        logger.info(f"load_session_and_update_state: Loaded {len(conversation_history)} conversation entries")
+                    else:
+                        # Initialize empty conversation history if none exists
+                        new_state["conversation_history"] = []
+                        logger.info("load_session_and_update_state: No conversation history found, initialized empty list")
+                    
+                    # Load UI history
+                    ui_history = self.load_previous_session(username, session_id)
+                    if not ui_history:
+                        # If no UI history exists, create from conversation_history
+                        ui_history = []
+                        for entry in conversation_history:
+                            query = entry.get("query")
+                            response = entry.get("response")
+                            if query and response:
+                                ui_history.append([query, response])
+                        logger.info(f"load_session_and_update_state: Created {len(ui_history)} UI history entries")
+                    
+                    # Save the persistent session ID
+                    self._save_persistent_session_id(username, session_id)
+                    
+                    logger.info(f"load_session_and_update_state: Session loaded and state updated with {len(conversation_history)} conversation entries")
+                    return ui_history, new_state
                 
                 # Events
                 image.upload(
@@ -455,7 +502,29 @@ def create_enhanced_chatbot():
                     outputs=[session_state, msg, chatbot, image, image_status]
                 )
                 
-                # Xử lý sự kiện đồng bộ hóa lịch sử
+                # CRITICAL FIX: Thêm log để giúp debug conversation_history
+                def debug_conversation_history(session_state):
+                    """Debug conversation history state"""
+                    try:
+                        if not session_state:
+                            logger.info(f"DEBUG: session_state is empty or None")
+                            return "No session state."
+                            
+                        session_id = session_state.get("session_id", "No session ID")
+                        conversation_history = session_state.get("conversation_history", [])
+                        
+                        logger.info(f"DEBUG: Session {session_id} has conversation_history with {len(conversation_history)} entries")
+                        
+                        if conversation_history and len(conversation_history) > 0:
+                            last_entry = conversation_history[-1]
+                            logger.info(f"DEBUG: Last entry query: {last_entry.get('query', 'None')[:30]}...")
+                            
+                        return f"Session {session_id} has {len(conversation_history)} conversation entries."
+                    except Exception as e:
+                        logger.error(f"Error in debug_conversation_history: {str(e)}")
+                        return "Error debugging conversation history."
+                
+                # Xử lý sự kiện đồng bộ hóa lịch sử - FIXED
                 def sync_history_handler(history, username, session_state):
                     # Lấy session_id từ session_state hoặc từ persistent storage
                     session_id = session_state.get("session_id")
@@ -468,13 +537,23 @@ def create_enhanced_chatbot():
                     if not session_id:
                         return history, session_state
                     
-                    # Tải conversation_history từ file
+                    # CRITICAL FIX: Tải conversation_history từ file và đảm bảo nó được lưu vào session_state
                     conversation_history = self._load_conversation_history(session_id)
                     if not conversation_history:
+                        logger.warning(f"No conversation history found for session {session_id}")
                         return history, session_state
                     
-                    # Cập nhật session_state
+                    # CRITICAL FIX: Cập nhật session_state với conversation_history mới
                     session_state["conversation_history"] = conversation_history
+                    logger.info(f"FIXED: Loaded and updated conversation_history with {len(conversation_history)} entries")
+                    
+                    # CRITICAL FIX: Hiển thị thông tin bổ sung để debug
+                    if conversation_history and len(conversation_history) > 0:
+                        last_entry = conversation_history[-1]
+                        logger.info(f"Last conversation entry query: {last_entry.get('query', 'None')[:30]}...")
+                        resp = last_entry.get('response', 'None')
+                        resp_preview = resp[:30] + "..." if resp and len(resp) > 30 else resp
+                        logger.info(f"Last conversation entry response: {resp_preview}")
                     
                     # Đồng bộ hóa history UI với conversation_history
                     synced_history = self._sync_ui_history_with_conversation(history, conversation_history)

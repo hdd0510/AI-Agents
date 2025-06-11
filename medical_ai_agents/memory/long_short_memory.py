@@ -192,7 +192,7 @@ class LongShortTermMemory:
         # Get recent interactions from short-term memory
         if session_id in self.short_term_memory:
             session_data = self.short_term_memory[session_id]
-            recent_interactions = session_data.get("interactions", [])[-3:]  # Last 3 interactions
+            recent_interactions = session_data.get("interactions", [])[-5:]  # Last 5 interactions
             
             if recent_interactions:
                 context_parts.append("Based on our recent conversation:")
@@ -373,7 +373,20 @@ class LongShortTermMemory:
             # Sắp xếp theo thời gian
             chat_history.sort(key=lambda x: x.get("timestamp", 0) if isinstance(x, dict) else 0)
             
+            # CRITICAL FIX: Kiểm tra và log thêm thông tin
             logger.info(f"Loaded {len(chat_history)} messages from session {session_id}")
+            
+            # CRITICAL FIX: Log details about the first and last messages for debugging
+            if chat_history:
+                if len(chat_history) > 0:
+                    first_msg = chat_history[0][0] if len(chat_history[0]) > 0 else "N/A"
+                    first_msg_preview = first_msg[:30] + "..." if len(first_msg) > 30 else first_msg
+                    logger.info(f"First message: {first_msg_preview}")
+                    
+                    last_msg = chat_history[-1][0] if len(chat_history[-1]) > 0 else "N/A"
+                    last_msg_preview = last_msg[:30] + "..." if len(last_msg) > 30 else last_msg
+                    logger.info(f"Last message: {last_msg_preview}")
+            
             return chat_history
             
         except Exception as e:
@@ -898,15 +911,57 @@ class MedicalAIChatbot:
                     choices = [(s["display_name"], s["session_id"]) for s in sessions]
                     return choices, gr.update(visible=True), f"Found {len(choices)} previous sessions."
             
-            def load_session(session_id, username):
+            # CRITICAL FIX: Updated to load both UI history and conversation history
+            def load_session(session_id, username, state):
                 if not session_id:
-                    return [], "Please select a session first."
+                    return [], state, "Please select a session first."
                 
-                history = self.load_previous_session(username, session_id)
+                # Generate user ID
+                user_id = self.generate_user_id(username)
+                
+                # Load history for UI
+                history = self.load_previous_session(user_id, session_id)
                 if not history:
-                    return [], "No conversations found in this session."
+                    return [], state, "No conversations found in this session."
                 
-                return history, f"Loaded session: {session_id}"
+                # CRITICAL FIX: Load conversation history for context
+                # Prepare a path to check conversation history file
+                conv_history_dir = os.path.join("sessions", "conversation_history")
+                if not os.path.exists(conv_history_dir):
+                    os.makedirs(conv_history_dir, exist_ok=True)
+                    
+                conv_file = os.path.join(conv_history_dir, f"{session_id}.json")
+                
+                # Update state with session information
+                new_state = state.copy() if state else {}
+                new_state["session_id"] = session_id
+                new_state["user_id"] = user_id
+                
+                # Load conversation history if exists
+                if os.path.exists(conv_file):
+                    try:
+                        with open(conv_file, 'r', encoding='utf-8') as f:
+                            conversation_history = json.load(f)
+                            new_state["conversation_history"] = conversation_history
+                            logger.info(f"CRITICAL FIX: Loaded {len(conversation_history)} entries into conversation_history")
+                            
+                            # Debug last entry
+                            if conversation_history and len(conversation_history) > 0:
+                                last_entry = conversation_history[-1]
+                                logger.info(f"Last conversation entry query: {last_entry.get('query', 'None')[:30]}...")
+                    except Exception as e:
+                        logger.error(f"Error loading conversation history: {e}")
+                
+                # Save the session as current
+                try:
+                    persistent_file = os.path.join("sessions", f"{username}.session")
+                    with open(persistent_file, 'w') as f:
+                        json.dump({"session_id": session_id}, f)
+                    logger.info(f"Saved session {session_id} as current persistent session for {username}")
+                except Exception as e:
+                    logger.error(f"Error saving persistent session: {e}")
+                
+                return history, new_state, f"Loaded session: {session_id} with {len(history)} messages"
             
             # Connect events
             send_btn.click(
@@ -945,10 +1000,11 @@ class MedicalAIChatbot:
                 outputs=[session_dropdown, load_session_btn, stats_display]
             )
             
+            # CRITICAL FIX: Updated to pass session_state and receive it back
             load_session_btn.click(
                 load_session,
-                inputs=[session_dropdown, username_input],
-                outputs=[chatbot, stats_display]
+                inputs=[session_dropdown, username_input, session_state],
+                outputs=[chatbot, session_state, stats_display]
             )
             
             # Tự động làm mới danh sách khi đổi tên người dùng

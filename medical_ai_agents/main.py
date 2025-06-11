@@ -9,6 +9,8 @@ import sys
 import json
 import logging
 from typing import Dict, Any, Optional, List
+import uuid
+import time
 
 from medical_ai_agents.config import MedicalGraphConfig
 from medical_ai_agents.graph.pipeline import create_medical_ai_graph
@@ -91,8 +93,6 @@ class EnhancedMedicalAISystem:
         
         # Create initial state
         from medical_ai_agents.config import SystemState
-        import uuid
-        import time
         
         # Use provided conversation history or initialize empty list
         history = conversation_history or []
@@ -113,16 +113,13 @@ class EnhancedMedicalAISystem:
         # Debug conversation history
         # self.logger.info(f"Conversation history received: {len(history)} entries")
         
-        if history and len(history) > 0:
+        # CRITICAL FIX: Logic bug - this code was resetting conversation history every time!
+        # Only initialize with welcome message if history is empty
+        if not history or len(history) == 0:
             # Log the content of each entry in history for debugging
-            # for i, entry in enumerate(history):
-            #     self.logger.info(f"History entry {i}: query='{entry.get('query', 'None')[:30]}...', "
-            #                     f"is_system={entry.get('is_system', False)}, "
-            #                     f"is_pending={entry.get('is_pending', False)}")
+            self.logger.info("No history found. Initializing with welcome message")
             
-            # self.logger.info(f"Last conversation entry: {history[-1].get('query', 'No query')[:30]}... - {history[-1].get('timestamp', 'No timestamp')}")
-            # Initialize with system welcome message if this is a brand new conversation
-            # self.logger.info("Initializing new conversation with system welcome message")
+            # Initialize with system welcome message since this is a new conversation
             history = [{
                 "query": "",  # Empty query because this isn't a user question
                 "response": "Hello! I'm your Medical AI Assistant specializing in healthcare consultation. How can I assist you with your medical questions today?",
@@ -131,7 +128,14 @@ class EnhancedMedicalAISystem:
                 "type": "init",  # Add a type to identify this as initialization
                 "session_id": session_id  # Add session_id to the initial system message
             }]
-            # self.logger.info(f"System welcome message added to history - New history length: {len(history)}")
+            self.logger.info("System welcome message added to new conversation")
+        else:
+            # If history already exists, log what we have
+            self.logger.info(f"Using existing conversation history with {len(history)} entries")
+            # Log the last entry for debugging
+            if history[-1].get("query"):
+                self.logger.info(f"Last history entry: '{history[-1].get('query', '')[:30]}...'")
+            # Don't reset history!
         
         # Clean up any pending entries that match the current query
         if query:

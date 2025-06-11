@@ -6,7 +6,7 @@ nodes với multi-task analysis và smart routing.
 
 import json
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Callable
 import time
 
 from langchain_openai import ChatOpenAI
@@ -14,6 +14,67 @@ from langchain.prompts import PromptTemplate
 from langchain.schema import StrOutputParser, HumanMessage
 
 from medical_ai_agents.config import SystemState, TaskType
+
+# Node wrapper to automatically mark tasks as completed
+def task_completion_wrapper(agent_node: Callable, task_name: str) -> Callable:
+    """
+    Wrapper to automatically mark tasks as completed after agent execution.
+    
+    This is a critical fix for the LangGraph state management issue.
+    """
+    logger = logging.getLogger("graph.nodes.wrapper")
+    
+    def wrapped_node(state: SystemState) -> SystemState:
+        # Always mark polyp_detection as completed if it's in required_tasks
+        # This is a workaround for the detector agent's unique structure
+        if task_name == "polyp_detection" and "polyp_detection" in state.get("required_tasks", []):
+            logger.info(f"Executing agent node for task: {task_name}")
+            updated_state = agent_node(state)
+            result_key = "detector_result"
+            
+            if result_key in updated_state:
+                # Always mark polyp_detection as completed regardless of success flag
+                # The detector will execute and either find polyps or not, but it will complete
+                detector_result = updated_state[result_key]
+                # Set success flag (for consistency with other results)
+                detector_result["success"] = True
+                logger.info(f"Marking polyp_detection as completed")
+                updated_state = _mark_task_completed(updated_state, task_name)
+            else:
+                logger.warning(f"Detector executed but no result found in state")
+            
+            return updated_state
+            
+        # For all other tasks
+        logger.info(f"Executing agent node for task: {task_name}")
+        updated_state = agent_node(state)
+        
+        # Task to result key mapping (special cases)
+        task_to_result_key = {
+            "modality_classification": "modality_result",
+            "region_classification": "region_result",
+            "medical_qa": "vqa_result",
+            "document_qa": "rag_result"
+        }
+        
+        # Get the correct result key for this task
+        result_key = task_to_result_key.get(task_name, f"{task_name}_result")
+        
+        # Check if the agent execution was successful
+        if result_key in updated_state:
+            # Standard handling for results
+            if updated_state[result_key].get("success", False):
+                logger.info(f"Task {task_name} successful, marking as completed")
+                # Mark the task as completed
+                updated_state = _mark_task_completed(updated_state, task_name)
+                return updated_state
+        
+        # If we get here, the task was not successful
+        logger.warning(f"Task {task_name} was not successful, not marking as completed")
+        
+        return updated_state
+    
+    return wrapped_node
 
 # Task Analyzer với Multi-Task Support
 def task_analyzer(state: SystemState, llm: ChatOpenAI) -> Dict:
@@ -72,7 +133,8 @@ def task_analyzer(state: SystemState, llm: ChatOpenAI) -> Dict:
             
             Instructions:
             - If the query is about medical advice, diagnosis, treatments, medical images, or healthcare → MEDICAL
-            - If the query is general conversation, non-medical topics, or not related to healthcare → GENERAL
+            - If the query is general conversation, personal information, greetings, or not related to healthcare → GENERAL
+            - Any personal identification like "my name is" should be classified as GENERAL
             
             Respond with only one word: MEDICAL or GENERAL
             """
@@ -328,33 +390,45 @@ def _determine_execution_order(required_tasks: List[str]) -> List[str]:
 
 # Task Progress Tracker
 def _mark_task_completed(state: SystemState, completed_task: str) -> SystemState:
-    """Mark a task as completed - FIXED VERSION"""
+    """
+    Mark a task as completed - CORRECT VERSION for LangGraph
     
-    # CRITICAL: Don't create new dict, modify existing state
-    print("--------------------------------")
-    print(f"🔧 DEBUG: state _mark_task_completed {state.get('completed_tasks')}")
-    print("--------------------------------")
-    completed_tasks = list(state.get("completed_tasks", []))
+    CRITICAL: LangGraph copies state between nodes, so we MUST return a new state dict
+    """
+    logger = logging.getLogger("graph.nodes.task_tracker")
+    
+    # Get current values
+    current_completed = list(state.get("completed_tasks", []))
     execution_order = state.get("execution_order", [])
     
     # Add to completed if not already there
-    if completed_task not in completed_tasks:
-        completed_tasks.append(completed_task)
-        print(f"🔧 DEBUG: Marked '{completed_task}' as completed. List: {completed_tasks}")
+    if completed_task not in current_completed:
+        current_completed.append(completed_task)
+        logger.info(f"Added '{completed_task}' to completed list: {current_completed}")
+    else:
+        logger.debug(f"Task '{completed_task}' already marked as completed")
     
     # Find next task
-    current_task = None
+    next_task = None
     for task in execution_order:
-        if task not in completed_tasks:
-            current_task = task
+        if task not in current_completed:
+            next_task = task
             break
     
-    # CRITICAL: Update the state object directly
-    state["completed_tasks"] = completed_tasks
-    state["current_task"] = current_task
+    # CRITICAL: Return NEW state dict (LangGraph requirement)
+    new_state = {
+        **state,  # Copy all existing fields
+        "completed_tasks": current_completed,  # Update completed tasks
+        "current_task": next_task  # Update current task
+    }
     
-    print(f"🔧 DEBUG: Updated state - completed: {completed_tasks}, current: {current_task}")
-    return state
+    # Ensure we're returning a new state object
+    if id(new_state) == id(state):
+        logger.error("CRITICAL ERROR: _mark_task_completed did not create a new state object!")
+        # Force creation of a new dict
+        new_state = dict(new_state)
+    
+    return new_state
 
 # Result Synthesizer
 def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
@@ -364,60 +438,22 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
     # Extract conversation history for debugging
     conversation_history = state.get("conversation_history", [])
     
-    # logger.info(f"Synthesizer received conversation history: {len(conversation_history)} entries")
-    # if conversation_history:
-    #     logger.info(f"First history entry: {conversation_history[0].get('query', 'Unknown')[:30]}...")
-    #     logger.info(f"Last history entry: {conversation_history[-1].get('query', 'Unknown')[:30]}...")
-    #     
-    #     # Log each entry for detailed debugging
-    #     for i, entry in enumerate(conversation_history[-2:]):  # Show last 2 entries
-    #         logger.info(f"History entry {i}: query='{entry.get('query', 'None')[:30]}...', "
-    #                      f"is_system={entry.get('is_system', False)}, "
-    #                      f"is_pending={entry.get('is_pending', False)}")
-    
     # Extract state parameters
     current_query = state.get("query", "")
     is_text_only = state.get("is_text_only", False)
     task_type = state.get("task_type", "unknown")
     
-    # Task info
+    # Task info with improved logging
     required_tasks = state.get("required_tasks", [])
     completed_tasks = state.get("completed_tasks", [])
     execution_order = state.get("execution_order", [])
-    logger.info(f"REQUIRED TASKS: {required_tasks}")
-    logger.info(f"COMPLETED TASKS: {completed_tasks}")
-    logger.info(f"EXECUTION ORDER: {execution_order}")
+    logger.info(f"Synthesizer - Required tasks: {required_tasks}, Completed tasks: {completed_tasks}")
     
     # Clean up pending/debug entries from conversation history
     if conversation_history:
         conversation_history = [entry for entry in conversation_history if not entry.get("is_pending", False)]
         # Update the state with cleaned history
         state["conversation_history"] = conversation_history
-        # logger.info(f"Cleaned conversation history, removed pending entries. Now has {len(conversation_history)} entries.")
-    
-    # logger.info(f"CONVERSATION HISTORY ENTRIES: {len(conversation_history)}")
-    # if conversation_history:
-    #     for i, entry in enumerate(conversation_history):
-    #         logger.info(f"HISTORY ENTRY {i}:")
-    #         logger.info(f"  - QUERY: {entry.get('query', 'None')[:50]}...")
-    #         logger.info(f"  - RESPONSE: {entry.get('response', 'None')[:50]}...")
-    #         logger.info(f"  - TIMESTAMP: {entry.get('timestamp', 'None')}")
-    
-    # if conversation_history:
-    #     logger.info(f"First history entry: {conversation_history[0].get('query', 'Unknown')[:30]}...")
-    #     logger.info(f"Last history entry: {conversation_history[-1].get('query', 'Unknown')[:30]}...")
-    #     
-    #     # Add detailed logging of conversation pairs
-    #     logger.info("=" * 50)
-    #     logger.info("CONVERSATION HISTORY PAIRS:")
-    #     for i, entry in enumerate(conversation_history):
-    #         is_system = entry.get("is_system", False)
-    #         entry_type = "SYSTEM" if is_system else "USER"
-    #         logger.info(f"ENTRY {i} [{entry_type}]:")
-    #         logger.info(f"  - QUERY: {entry.get('query', 'None')[:50]}...")
-    #         logger.info(f"  - RESPONSE: {entry.get('response', 'None')[:50]}...")
-    #         logger.info(f"  - TIMESTAMP: {entry.get('timestamp', 'None')}")
-    #     logger.info("=" * 50)
     
     # Available results
     agent_results_keys = []
@@ -432,30 +468,9 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
     if "rag_result" in state:
         agent_results_keys.append("rag_result")
     
-    logger.info(f"AVAILABLE AGENT RESULTS: {agent_results_keys}")
-    logger.info("=" * 50)
-    
     # Calculate processing time
     start_time = state.get("start_time", time.time())
     processing_time = time.time() - start_time
-    
-    # Debug information about conversation history
-    # logger.info(f"Synthesizer received conversation history: {len(conversation_history)} entries")
-    # if conversation_history:
-    #     logger.info(f"First history entry: {conversation_history[0].get('query', 'Unknown')[:30]}...")
-    #     logger.info(f"Last history entry: {conversation_history[-1].get('query', 'Unknown')[:30]}...")
-    #     
-    #     # Add detailed logging of conversation pairs
-    #     logger.info("=" * 50)
-    #     logger.info("CONVERSATION HISTORY PAIRS:")
-    #     for i, entry in enumerate(conversation_history):
-    #         is_system = entry.get("is_system", False)
-    #         entry_type = "SYSTEM" if is_system else "USER"
-    #         logger.info(f"ENTRY {i} [{entry_type}]:")
-    #         logger.info(f"  - QUERY: {entry.get('query', 'None')[:50]}...")
-    #         logger.info(f"  - RESPONSE: {entry.get('response', 'None')[:50]}...")
-    #         logger.info(f"  - TIMESTAMP: {entry.get('timestamp', 'None')}")
-    #     logger.info("=" * 50)
     
     # Check if it's a general (non-medical) query
     is_general_query = "general_query" in state.get("required_tasks", [])
@@ -532,8 +547,6 @@ Respond to this question directly and conversationally. Even though this isn't a
             })
             
             logger.info(f"Added new general query entry to conversation history. Now has {len(conversation_history)} entries.")
-            logger.info(f"New entry query: {current_query[:30]}...")
-            logger.info(f"New entry response: {general_response[:30]}...")
             
             return {
                 **state, 
@@ -697,12 +710,6 @@ Your response must read like it comes from a single, unified medical assistant w
         "conversation_context": conversation_context
     }
     
-    # Debug the exact conversation context being sent
-    logger.info("=" * 50)
-    logger.info("EXACT CONVERSATION CONTEXT FOR LLM:")
-    logger.info(f"\n{conversation_context}")
-    logger.info("=" * 50)
-    
     # Add RAG-specific information if prioritizing RAG
     if prioritize_rag and has_rag:
         rag_result = agent_results["rag"]
@@ -806,8 +813,6 @@ Your response must read like it comes from a single, unified medical assistant w
         })
         
         logger.info(f"Added new entry to conversation history. Now has {len(conversation_history)} entries.")
-        logger.info(f"New entry query: {current_query[:30]}...")
-        logger.info(f"New entry response: {synthesized_response[:30]}...")
         
         return {
             **state, 

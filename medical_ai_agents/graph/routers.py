@@ -23,6 +23,7 @@ def task_router(state: SystemState) -> str:
     required_tasks = state.get("required_tasks", [])
     completed_tasks = state.get("completed_tasks", [])
     execution_order = state.get("execution_order", [])
+    current_task = state.get("current_task")
     image_path = state.get("image_path", "")
     is_text_only = state.get("is_text_only", False)
     uploaded_docs = state.get("uploaded_documents", [])
@@ -60,15 +61,16 @@ def task_router(state: SystemState) -> str:
         logger.info("Text-only medical query, routing to VQA")
         return "vqa"
     
-    # Find next task to execute
-    next_task = None
-    for task in execution_order:
-        if task not in completed_tasks:
-            next_task = task
-            break
+    # Use the current_task if available, otherwise find next task
+    next_task = current_task
+    if not next_task:
+        for task in execution_order:
+            if task not in completed_tasks:
+                next_task = task
+                break
     
     if not next_task:
-        logger.info("All tasks completed, routing to synthesizer")
+        logger.info("All tasks completed or no tasks defined, routing to synthesizer")
         return "synthesizer"
     
     # Route based on next task
@@ -88,36 +90,27 @@ def task_router(state: SystemState) -> str:
 
 #  Post-Agent Routers
 def post_detector_router(state: SystemState) -> str:
-    """ router after detector với multi-task logic."""
+    """Router after detector - returns only routing decision."""
     logger = logging.getLogger("graph.routers.post_detector")
     
-    # Mark detector task as completed
-    state = _mark_task_completed(state, "polyp_detection")
-    
+    # DEBUG: Inspect state but DO NOT modify it (LangGraph handles this)
     required_tasks = state.get("required_tasks", [])
     completed_tasks = state.get("completed_tasks", [])
     execution_order = state.get("execution_order", [])
-    
-    # Ensure image_path is preserved in state
-    if "image_path" in state and state["image_path"]:
-        logger.info(f"Preserving image path: {state['image_path']} for subsequent tasks")
-        
-        # Verify that the image exists for subsequent tasks
-        if os.path.exists(state["image_path"]):
-            logger.info(f"Image file verified: {state['image_path']}")
-        else:
-            logger.warning(f"Image file does not exist: {state['image_path']} - this may cause issues")
+    current_task = state.get("current_task")
     
     logger.info(f"Post-detector: Required={required_tasks}, Completed={completed_tasks}")
     
-    # Find next task
-    next_task = None
-    for task in execution_order:
-        if task not in completed_tasks:
-            next_task = task
-            break
+    # Use current_task if available (coming from _mark_task_completed), otherwise find next
+    next_task = current_task
+    if not next_task:
+        for task in execution_order:
+            if task not in completed_tasks and task != "polyp_detection":
+                next_task = task
+                break
     
     if not next_task:
+        logger.info("All tasks completed or no more tasks, routing to synthesizer")
         return "synthesizer"
     
     # Route to next task
@@ -134,24 +127,24 @@ def post_detector_router(state: SystemState) -> str:
 
 
 def post_modality_router(state: SystemState) -> str:
-    """Enhanced router after modality classifier."""
+    """Router after modality classifier - returns only routing decision."""
     logger = logging.getLogger("graph.routers.post_modality")
     
-    # Mark modality task as completed
-    state = _mark_task_completed(state, "modality_classification")
-    
+    # DEBUG: Inspect state but DO NOT modify it (LangGraph handles this)
     required_tasks = state.get("required_tasks", [])
     completed_tasks = state.get("completed_tasks", [])
     execution_order = state.get("execution_order", [])
+    current_task = state.get("current_task")
     
     logger.info(f"Post-modality: Required={required_tasks}, Completed={completed_tasks}")
     
-    # Find next task
-    next_task = None
-    for task in execution_order:
-        if task not in completed_tasks:
-            next_task = task
-            break
+    # Use current_task if available, otherwise find next task
+    next_task = current_task
+    if not next_task:
+        for task in execution_order:
+            if task not in completed_tasks and task != "modality_classification":
+                next_task = task
+                break
     
     # Check if we have modality_result to determine if we need synthesis
     modality_result = state.get("modality_result", {})
@@ -159,7 +152,7 @@ def post_modality_router(state: SystemState) -> str:
     # Route to synthesizer if we have modality result with low confidence
     # or there are no more tasks
     if modality_result.get("is_low_confidence", False) or not next_task:
-        logger.info("Routing to synthesizer for modality result analysis")
+        logger.info("Routing to synthesizer for modality result analysis or no more tasks")
         return "synthesizer"
     
     # Route to next task
@@ -175,24 +168,24 @@ def post_modality_router(state: SystemState) -> str:
 
 
 def post_region_router(state: SystemState) -> str:
-    """Enhanced router after region classifier."""
+    """Router after region classifier - returns only routing decision."""
     logger = logging.getLogger("graph.routers.post_region")
     
-    # Mark region task as completed
-    state = _mark_task_completed(state, "region_classification")
-    
+    # DEBUG: Inspect state but DO NOT modify it (LangGraph handles this)
     required_tasks = state.get("required_tasks", [])
     completed_tasks = state.get("completed_tasks", [])
     execution_order = state.get("execution_order", [])
+    current_task = state.get("current_task")
     
     logger.info(f"Post-region: Required={required_tasks}, Completed={completed_tasks}")
     
-    # Find next task
-    next_task = None
-    for task in execution_order:
-        if task not in completed_tasks:
-            next_task = task
-            break
+    # Use current_task if available, otherwise find next task
+    next_task = current_task
+    if not next_task:
+        for task in execution_order:
+            if task not in completed_tasks and task != "region_classification":
+                next_task = task
+                break
     
     # Check if we have region_result to determine if we need synthesis
     region_result = state.get("region_result", {})
@@ -200,25 +193,31 @@ def post_region_router(state: SystemState) -> str:
     # Route to synthesizer if we have region result with low confidence
     # or there are no more tasks
     if region_result.get("is_low_confidence", False) or not next_task:
-        logger.info("Routing to synthesizer for region result analysis")
+        logger.info("Routing to synthesizer for region result analysis or no more tasks")
         return "synthesizer"
     
     # Route to next task (likely VQA)
     if next_task == "medical_qa":
+        logger.info(f"Post-region next task: medical_qa → vqa")
         return "vqa"
     else:
+        logger.info(f"Post-region next task: {next_task} → synthesizer")
         return "synthesizer"
 
+
 def post_vqa_router(state: SystemState) -> str:
-    """Router after VQA that routes to synthesizer."""
+    """Router after VQA - returns only routing decision."""
     logger = logging.getLogger("graph.routers.post_vqa")
     
-    # Mark VQA task as completed
-    state = _mark_task_completed(state, "medical_qa")
+    # DEBUG: Inspect state but DO NOT modify it (LangGraph handles this)
+    completed_tasks = state.get("completed_tasks", [])
+    
+    logger.info(f"Post-vqa: Completed={completed_tasks}")
     
     # Always route to synthesizer
     logger.info("Routing to synthesizer after VQA")
     return "synthesizer"
+
 
 def post_vqa_router_with_rag(state: SystemState) -> str:
     """Router after VQA that checks for uploaded documents and routes to RAG if any are found."""
@@ -244,12 +243,15 @@ def post_vqa_router_with_rag(state: SystemState) -> str:
     logger.info("No valid documents found, proceeding to synthesizer")
     return "synthesizer"
 
+
 def post_rag_router(state: SystemState) -> str:
-    """Router after RAG that decides whether to use VQA based on query complexity."""
+    """Router after RAG - returns only routing decision."""
     logger = logging.getLogger("graph.routers.post_rag")
     
-    # Mark RAG task as completed
-    state = _mark_task_completed(state, "document_qa")
+    # DEBUG: Inspect state but DO NOT modify it (LangGraph handles this)
+    completed_tasks = state.get("completed_tasks", [])
+    
+    logger.info(f"Post-rag: Completed={completed_tasks}")
     
     # Check if we have RAG results and query complexity
     rag_result = state.get("rag_result", {})
