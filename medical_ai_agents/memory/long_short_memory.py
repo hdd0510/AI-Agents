@@ -380,6 +380,78 @@ class LongShortTermMemory:
             logger.error(f"Error loading previous session: {str(e)}")
             return []
 
+    def clear_short_term(self, session_id: str) -> bool:
+        """Xóa dữ liệu short-term memory cho một session cụ thể."""
+        logger = logging.getLogger("memory.clear")
+        
+        if session_id in self.short_term_memory:
+            # Xóa session khỏi bộ nhớ
+            del self.short_term_memory[session_id]
+            logger.info(f"Cleared short-term memory for session {session_id}")
+            
+            # Lưu lại trạng thái bộ nhớ
+            self._save_short_term_memory()
+            return True
+        else:
+            logger.info(f"No short-term memory found for session {session_id}")
+            return False
+    
+    def clear_long_term(self, user_id: str, session_id: str = None) -> bool:
+        """Xóa dữ liệu long-term memory cho một user.
+        
+        Args:
+            user_id: ID của người dùng
+            session_id: Nếu được cung cấp, chỉ xóa dữ liệu của session này
+                        Nếu không, xóa toàn bộ dữ liệu của user
+        """
+        logger = logging.getLogger("memory.clear")
+        
+        user_dir = os.path.join(self.storage_path, "users", user_id)
+        history_file = os.path.join(user_dir, "history.jsonl")
+        
+        if not os.path.exists(history_file):
+            logger.info(f"No history file found for user {user_id}")
+            return False
+            
+        try:
+            if session_id:
+                # Chỉ xóa dữ liệu của session cụ thể
+                # Đọc toàn bộ file, lọc ra các entry không thuộc session_id, và ghi lại
+                with open(history_file, 'r', encoding='utf-8') as f:
+                    entries = [json.loads(line) for line in f]
+                
+                # Lọc các entry không thuộc session_id
+                filtered_entries = [entry for entry in entries 
+                                   if entry.get("session_id") != session_id]
+                
+                if len(filtered_entries) < len(entries):
+                    # Có entry bị xóa, ghi lại file
+                    with open(history_file, 'w', encoding='utf-8') as f:
+                        for entry in filtered_entries:
+                            f.write(json.dumps(entry, ensure_ascii=False) + '\n')
+                    
+                    logger.info(f"Removed {len(entries) - len(filtered_entries)} entries for session {session_id} from user {user_id}'s history")
+                    return True
+                else:
+                    logger.info(f"No entries found for session {session_id} in user {user_id}'s history")
+                    return False
+            else:
+                # Xóa toàn bộ dữ liệu của user
+                import shutil
+                
+                # Xóa thư mục user
+                if os.path.exists(user_dir):
+                    shutil.rmtree(user_dir)
+                    logger.info(f"Removed all long-term memory for user {user_id}")
+                    return True
+                else:
+                    logger.info(f"No user directory found for user {user_id}")
+                    return False
+                
+        except Exception as e:
+            logger.error(f"Error clearing long-term memory: {str(e)}")
+            return False
+
 class MedicalAIChatbot:
     """Medical AI Chatbot với Gradio interface."""
     

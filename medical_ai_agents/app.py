@@ -349,23 +349,28 @@ def create_enhanced_chatbot():
                     # Thêm nút để đồng bộ hóa lịch sử
                     sync_history_btn = gr.Button("🔄 Sync History", variant="secondary")
                 
-                # Xử lý sự kiện clear để cũng xóa session_state
+                # Xử lý sự kiện clear để xóa triệt để dữ liệu
                 def clear_handler():
                     # Xóa dữ liệu session_state, conversation_history và file lịch sử nếu có
                     try:
                         session_id = session_state.get("session_id") if isinstance(session_state, dict) else None
                         username_val = username.value if hasattr(username, 'value') else None
+                        user_id = session_state.get("user_id") if isinstance(session_state, dict) else None
+                        
                         # Xóa conversation_history trong session_state
                         if isinstance(session_state, dict):
-                            # Reset hoàn toàn session_state về empty dict thay vì chỉ xóa conversation_history
-                            for key in list(session_state.keys()):
-                                if key != "session_id":  # Giữ lại session_id
-                                    session_state.pop(key, None)
+                            # Reset hoàn toàn session_state về empty dict
+                            session_state.clear()
+                            # Tạo session_id mới để đảm bảo bắt đầu phiên mới hoàn toàn
+                            session_state["session_id"] = str(uuid.uuid4())
                             session_state["conversation_history"] = []
+                            logger.info(f"Created new session ID: {session_state['session_id']}")
                             
                         # Xóa file history nếu có session_id
                         if session_id:
                             import os
+                            import shutil
+                            
                             # Xóa file history UI
                             history_file = os.path.join("sessions", "history", f"{session_id}.json")
                             if os.path.exists(history_file):
@@ -383,14 +388,65 @@ def create_enhanced_chatbot():
                                     logger.info(f"Removed conversation history file: {conv_file}")
                                 except Exception as e:
                                     logger.error(f"Failed to remove conversation history file: {e}")
+                            
+                            # Xóa persistent session ID
+                            if username_val:
+                                persistent_file = os.path.join("sessions", f"{username_val}.session")
+                                if os.path.exists(persistent_file):
+                                    try:
+                                        os.remove(persistent_file)
+                                        logger.info(f"Removed persistent session file: {persistent_file}")
+                                    except Exception as e:
+                                        logger.error(f"Failed to remove persistent session file: {e}")
+                                
+                                # Xóa file persistent session trong thư mục data
+                                if hasattr(self, "_get_persistent_session_path"):
+                                    persistent_path = self._get_persistent_session_path(username_val)
+                                    if os.path.exists(persistent_path):
+                                        try:
+                                            os.remove(persistent_path)
+                                            logger.info(f"Removed persistent session path: {persistent_path}")
+                                        except Exception as e:
+                                            logger.error(f"Failed to remove persistent session path: {e}")
+                            
+                            # Xóa dữ liệu trong bộ nhớ
+                            if hasattr(self, "memory"):
+                                try:
+                                    # Xóa short-term memory
+                                    if hasattr(self.memory, "clear_short_term") and session_id:
+                                        self.memory.clear_short_term(session_id)
+                                        logger.info(f"Cleared short-term memory for session: {session_id}")
+                                    
+                                    # Xóa long-term memory cho user này
+                                    if hasattr(self.memory, "clear_long_term") and user_id:
+                                        self.memory.clear_long_term(user_id, session_id)
+                                        logger.info(f"Cleared long-term memory for user: {user_id}")
+                                except Exception as e:
+                                    logger.error(f"Error clearing memory: {e}")
+                            
+                            # Xóa các ảnh tạm đã lưu
+                            try:
+                                temp_dir = os.path.join(os.path.dirname(__file__), '..', 'visualizations')
+                                if os.path.exists(temp_dir):
+                                    for file in os.listdir(temp_dir):
+                                        if session_id in file:
+                                            file_path = os.path.join(temp_dir, file)
+                                            try:
+                                                os.remove(file_path)
+                                                logger.info(f"Removed visualization file: {file_path}")
+                                            except Exception as e:
+                                                logger.error(f"Failed to remove visualization file: {e}")
+                            except Exception as e:
+                                logger.error(f"Error clearing visualization files: {e}")
+                                
                     except Exception as e:
                         logger.error(f"Error clearing chat data: {e}")
                         
                     # Thêm debug log
-                    logger.info("Clear chat triggered - resetting session state and UI")
+                    logger.info("Clear chat triggered - reset completed, all data cleared")
                     
                     # Trả về empty session và UI elements
-                    return {"conversation_history": []}, "", [], None, "Chưa có ảnh"
+                    return {"session_id": str(uuid.uuid4()), "conversation_history": []}, "", [], None, "Chưa có ảnh"
                 
                 # Kết nối nút clear với hàm xử lý
                 clear_btn.click(
