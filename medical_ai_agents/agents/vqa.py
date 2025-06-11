@@ -45,14 +45,14 @@ class VQAAgent(BaseAgent):
     def _get_system_prompt(self) -> str:
         """Clear system prompt với correct format."""
         return f"""You are a medical consultation AI with expert knowledge in medical imaging and pathology. You have ability of 
-        reasoning and handle questions, so just use tools to provide more accurate medical advice to your answer
+        reasoning and handle questions with tools (provide image path if available) to provide more accurate medical advice to your answer. You should reason and act step by step. If results from tools are not good, you should try again.
 
 RESPONSE FORMAT (REQUIRED):
 Thought: [your reasoning]
 Action: [tool_name or Final Answer]
 Action Input: {{"param": "value"}}
 
-EXAMPLES:
+EXAMPLES :
 Thought: I need to use LLaVA to analyze this medical query
 Action: llava_vqa
 Action Input: {{"query": "user question", "medical_context": {{}}, "image_path": "path"}}
@@ -98,11 +98,22 @@ Always use the exact format above. Start with "Thought:"."""
     def _run_react_loop(self, task_input: Dict[str, Any]) -> Dict[str, Any]:
         """Simple ReAct loop với fallback."""
         self.react_history = []
-        # Store current task input for use in _execute_tool
+        # Process the query to extract only useful information
+        if "query" in task_input:
+            task_input["query"] = self._process_user_query(task_input["query"])
+        # Store current task input for use in _execute_tool and _synthesis_step
         self.current_task_input = task_input
+        
+        self.logger.info("="*50)
+        self.logger.info("STARTING VQA REACT LOOP")
+        self.logger.info(f"Query: '{task_input.get('query', '')[:100]}...'")
+        self.logger.info(f"Image path: {task_input.get('image_path', 'None')}")
+        self.logger.info("="*50)
         
         for i in range(1, self.max_iterations + 1):
             try:
+                self.logger.info(f"VQA ITERATION {i}/{self.max_iterations}")
+                
                 # Get LLM response
                 messages = self._create_react_messages(task_input)
                 response = self.llm.invoke(messages)
@@ -110,8 +121,13 @@ Always use the exact format above. Start with "Thought:"."""
                 # Parse response
                 thought, action, action_input = self._parse_llm_response(resp_content)
                 
+                self.logger.info(f"THOUGHT: {thought[:150]}..." if thought and len(thought) > 150 else f"THOUGHT: {thought}")
+                self.logger.info(f"ACTION: {action}")
+                self.logger.info(f"ACTION INPUT: {json.dumps(action_input, ensure_ascii=False)[:150]}..." if action_input else "ACTION INPUT: None")
+                
                 if not thought or not action:
                     # If parsing fails, try direct tool call
+                    self.logger.info("Parsing failed, trying direct tool call")
                     if i == 1:  # First attempt, try direct call
                         return self._direct_tool_call(task_input)
                     else:
@@ -131,6 +147,11 @@ Always use the exact format above. Start with "Thought:"."""
                     self.react_history.append(step)
                     
                     answer = action_input.get("answer") if action_input else thought
+                    self.logger.info("="*50)
+                    self.logger.info("VQA FINAL ANSWER (from direct final answer)")
+                    self.logger.info(f"Answer: {answer[:200]}..." if len(answer) > 200 else f"Answer: {answer}")
+                    self.logger.info("="*50)
+                    
                     return {
                         "success": True,
                         "answer": answer,
@@ -140,31 +161,44 @@ Always use the exact format above. Start with "Thought:"."""
                 
                 # Execute tool
                 if action in [tool.name for tool in self.tools]:
+                    self.logger.info(f"Executing tool: {action}")
                     observation = self._execute_tool(action, action_input or {})
                     step.observation = observation
                     step.thought_type = ThoughtType.OBSERVATION
                     self.react_history.append(step)
                     
+                    # Log observation (truncated if too long)
+                    obs_preview = observation[:200] + "..." if len(observation) > 200 else observation
+                    self.logger.info(f"OBSERVATION: {obs_preview}")
+                    
                     # After tool execution, do synthesis
                     if i >= 1:  # At least 1 iteration done
+                        self.logger.info("Attempting synthesis after tool execution")
                         synthesis_result = self._synthesis_step(task_input)
                         if synthesis_result.get("success"):
                             return synthesis_result
                 else:
                     step.observation = f"Unknown action: {action}"
                     self.react_history.append(step)
+                    self.logger.info(f"Unknown action: {action}")
                     
             except Exception as e:
                 self.logger.error(f"Iteration {i} failed: {str(e)}")
                 continue
         
         # Max iterations reached, try synthesis
+        self.logger.info("Max iterations reached, attempting final synthesis")
         return self._synthesis_step(task_input)
     
     def _direct_tool_call(self, task_input: Dict[str, Any]) -> Dict[str, Any]:
         """Direct tool call fallback."""
         try:
+            self.logger.info("="*50)
+            self.logger.info("USING DIRECT TOOL CALL")
+            
             query = task_input.get("query", "Medical consultation")
+            # Process the query to extract only useful information
+            query = self._process_user_query(query)
             image_path = task_input.get("image_path", "")
             medical_context = task_input.get("medical_context", {})
             
@@ -184,16 +218,24 @@ Always use the exact format above. Start with "Thought:"."""
                 self.logger.warning(f"Image path not added to params - Path: '{image_path}', Exists: {bool(image_path and os.path.exists(image_path))}")
             
             # Call LLaVA tool with necessary parameters
+            self.logger.info("Calling LLaVA tool directly")
             result = self.llava_tool._run(**params)
             
             if result.get("success"):
+                answer = result.get("answer", "")
+                self.logger.info("="*50)
+                self.logger.info("VQA FINAL ANSWER (from direct tool call)")
+                self.logger.info(f"Answer: {answer[:200]}..." if len(answer) > 200 else f"Answer: {answer}")
+                self.logger.info("="*50)
+                
                 return {
                     "success": True,
-                    "answer": result.get("answer", ""),
+                    "answer": answer,
                     "iterations_used": 0,
                     "termination_reason": "direct_call"
                 }
             else:
+                self.logger.error(f"Direct tool call failed: {result.get('error', 'Unknown error')}")
                 return {
                     "success": False,
                     "error": result.get("error", "Direct call failed"),
@@ -213,6 +255,9 @@ Always use the exact format above. Start with "Thought:"."""
         SYNTHESIS FUNCTION - LLM nhìn vào kết quả tools và đưa ra kết quả cuối
         """
         try:
+            self.logger.info("="*50)
+            self.logger.info("STARTING VQA SYNTHESIS")
+            
             # Collect tool results from history
             tool_results = []
             for step in self.react_history:
@@ -231,7 +276,10 @@ Always use the exact format above. Start with "Thought:"."""
                             "thought": step.thought
                         })
             
+            self.logger.info(f"Collected {len(tool_results)} tool results for synthesis")
+            
             if not tool_results:
+                self.logger.warning("No tool results to synthesize")
                 return {
                     "success": False,
                     "error": "No tool results to synthesize",
@@ -241,21 +289,88 @@ Always use the exact format above. Start with "Thought:"."""
             # Create synthesis prompt
             synthesis_prompt = self._create_synthesis_prompt(task_input, tool_results)
             
-            # Get synthesis from LLM
+            # Check if we have images to include in synthesis
+            image_path = task_input.get("image_path", "")
+            has_original_image = bool(image_path and os.path.exists(image_path))
+            
+            # Check for visualization from detector
+            detector_viz_base64 = None
+            medical_context = task_input.get("medical_context", {})
+            if "detector_result" in getattr(self, 'current_state', {}):
+                detector_result = self.current_state.get("detector_result", {})
+                if detector_result.get("visualization_base64"):
+                    detector_viz_base64 = detector_result["visualization_base64"]
+                    self.logger.info("Found detector visualization with bounding boxes")
+            
+            # Get synthesis from LLM with images if available
             synthesis_messages = [
-                SystemMessage(content="You are a medical expert providing final consultation synthesis."),
-                HumanMessage(content=synthesis_prompt)
+                SystemMessage(content="You are a medical expert providing final consultation synthesis.")
             ]
             
+            # Prepare the message content
+            message_content = []
+            message_content.append({"type": "text", "text": synthesis_prompt})
+            
+            # Add images to message content if available
+            images_included = False
+            
+            if has_original_image or detector_viz_base64:
+                import base64
+                from PIL import Image
+                from io import BytesIO
+                
+                def image_to_base64(img_path):
+                    with Image.open(img_path) as img:
+                        buffered = BytesIO()
+                        img.save(buffered, format="PNG")
+                        return base64.b64encode(buffered.getvalue()).decode()
+                
+                # Add detector visualization if available
+                if detector_viz_base64:
+                    try:
+                        message_content.append(
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{detector_viz_base64}"}}
+                        )
+                        self.logger.info("Successfully included detector visualization in synthesis message")
+                        images_included = True
+                    except Exception as e:
+                        self.logger.error(f"Failed to include detector visualization in synthesis: {str(e)}")
+
+                # Add original image if available
+                elif has_original_image:
+                    try:
+                        img_b64 = image_to_base64(image_path)
+                        message_content.append(
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
+                        )
+                        self.logger.info("Successfully included original image in synthesis message")
+                        images_included = True
+                    except Exception as e:
+                        self.logger.error(f"Failed to include original image in synthesis: {str(e)}")
+            
+            # Create the final message
+            if images_included:
+                synthesis_messages.append(HumanMessage(content=message_content))
+            else:
+                synthesis_messages.append(HumanMessage(content=synthesis_prompt))
+            
+            self.logger.info("Generating synthesis response")
             synthesis_response = self.llm.invoke(synthesis_messages)
             final_answer = synthesis_response.content.strip()
+            
+            self.logger.info("="*50)
+            self.logger.info("VQA FINAL ANSWER (from synthesis)")
+            self.logger.info(f"Answer: {final_answer[:200]}..." if len(final_answer) > 200 else f"Answer: {final_answer}")
+            self.logger.info("="*50)
             
             return {
                 "success": True,
                 "answer": final_answer,
                 "iterations_used": len(self.react_history),
                 "termination_reason": "synthesis_complete",
-                "tool_results_count": len(tool_results)
+                "tool_results_count": len(tool_results),
+                "included_original_image": has_original_image,
+                "included_detector_visualization": bool(detector_viz_base64)
             }
             
         except Exception as e:
@@ -267,15 +382,22 @@ Always use the exact format above. Start with "Thought:"."""
                     try:
                         obs_data = json.loads(step.observation)
                         if obs_data.get("success") and obs_data.get("answer"):
+                            answer = obs_data["answer"]
+                            self.logger.info("="*50)
+                            self.logger.info("VQA FINAL ANSWER (from fallback)")
+                            self.logger.info(f"Answer: {answer[:200]}..." if len(answer) > 200 else f"Answer: {answer}")
+                            self.logger.info("="*50)
+                            
                             return {
                                 "success": True,
-                                "answer": obs_data["answer"],
+                                "answer": answer,
                                 "iterations_used": len(self.react_history),
                                 "termination_reason": "fallback_from_synthesis_error"
                             }
                     except:
                         continue
             
+            self.logger.error("Synthesis failed with no fallback available")
             return {
                 "success": False,
                 "error": f"Synthesis error: {str(e)}",
@@ -285,7 +407,21 @@ Always use the exact format above. Start with "Thought:"."""
     def _create_synthesis_prompt(self, task_input: Dict[str, Any], tool_results: List[Dict[str, Any]]) -> str:
         """Create synthesis prompt for final answer."""
         query = task_input.get("query", "")
+        # Process the query to extract only useful information
+        query = self._process_user_query(query)
         has_image = bool(task_input.get("image_path") and os.path.exists(task_input.get("image_path", "")))
+        
+        # Check for detector visualization
+        has_detector_viz = False
+        detector_info = ""
+        if hasattr(self, 'current_state') and "detector_result" in self.current_state:
+            detector_result = self.current_state.get("detector_result", {})
+            if detector_result.get("visualization_base64"):
+                has_detector_viz = True
+                polyp_count = detector_result.get("count", 0)
+                detector_info = f"\n\nDetector found {polyp_count} polyp(s) in the image."
+                if polyp_count > 0:
+                    detector_info += " The second image shows the visualization with bounding boxes around detected polyps."
         
         # Format tool results
         results_text = ""
@@ -304,11 +440,45 @@ Always use the exact format above. Start with "Thought:"."""
             else:
                 results_text += f"   Error: {tool_data.get('error', 'Unknown error')}\n"
         
-        return f"""**MEDICAL CONSULTATION SYNTHESIS**\n\nOriginal Query: \"{query}\"\nHas Image: {has_image}\n\nTool Execution Results:\n{results_text}\n\n**YOUR TASK:**\nAnalyze the tool results above and provide a comprehensive final medical consultation response.\n\n**Requirements:**\n1. Synthesize information from all successful tool executions\n2. Provide clear, professional medical advice\n4. Recommend next steps or follow-up if needed\n5. Be concise but thorough\n\n**Format your response as a complete medical consultation answer.**"""
+        image_guidance = ""
+        if has_image:
+            image_guidance = """
+I am showing you the original medical image for direct analysis. Please examine the image carefully and include visual observations in your synthesis."""
+            
+            if has_detector_viz:
+                image_guidance += """
+
+I am also showing you a second image with the detector's visualization containing bounding boxes around detected polyps. Please analyze both images and compare them in your assessment."""
+        
+        return f"""**MEDICAL CONSULTATION SYNTHESIS**
+
+Original Query: "{query}"
+Has Image: {has_image}{detector_info}{image_guidance}
+
+Tool Execution Results:
+{results_text}
+
+**YOUR TASK:**
+Analyze the tool results above and provide a comprehensive final medical consultation response.
+
+**Requirements:**
+1. Synthesize information from all successful tool executions
+2. Provide clear, professional medical advice
+3. If you can see the image(s), include your direct observations
+4. If you can see both the original image and detector visualization, compare them and verify the detector's findings
+5. Recommend next steps or follow-up if needed
+6. Be concise but thorough
+
+**Format your response as a complete medical consultation answer.**"""
 
     def _format_agent_result(self, react_result: Dict[str, Any]) -> Dict[str, Any]:
         """Format VQA result."""
         if not react_result.get("success", False):
+            self.logger.error("="*50)
+            self.logger.error("VQA PROCESSING FAILED")
+            self.logger.error(f"Error: {react_result.get('error', 'Unknown error')}")
+            self.logger.error("="*50)
+            
             return {
                 "vqa_result": {
                     "success": False,
@@ -338,6 +508,16 @@ Always use the exact format above. Start with "Thought:"."""
             "used_rag": used_rag
         }
         
+        self.logger.info("="*50)
+        self.logger.info("FINAL VQA RESULT FORMATTED")
+        self.logger.info(f"Success: {vqa_result['success']}")
+        self.logger.info(f"Approach: {vqa_result['approach']}")
+        self.logger.info(f"Used RAG: {vqa_result['used_rag']}")
+        self.logger.info(f"Answer: {answer[:]}")
+        self.logger.info(f"Termination reason: {react_result.get('termination_reason', 'unknown')}")
+        self.logger.info(f"Iterations used: {react_result.get('iterations_used', 0)}")
+        self.logger.info("="*50)
+        
         return {"vqa_result": vqa_result}
 
     def initialize(self) -> bool:
@@ -352,6 +532,9 @@ Always use the exact format above. Start with "Thought:"."""
 
     def _extract_task_input(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Extract task input."""
+        # Store the current state for later access to detector result
+        self.current_state = state
+        
         medical_context = state.get("medical_context")
         medical_context = medical_context.copy() if medical_context else {}
         
@@ -400,9 +583,13 @@ Always use the exact format above. Start with "Thought:"."""
             # Force is_text_only to False to ensure image is used
             state["is_text_only"] = False
         
+        # Get the query and process it to extract only useful information
+        query = state.get("query", "")
+        processed_query = self._process_user_query(query)
+        
         return {
             "image_path": image_path,
-            "query": state.get("query", ""),
+            "query": processed_query,
             "medical_context": medical_context,
             "is_text_only": state.get("is_text_only", False),
             "rag_result": rag_result
@@ -411,6 +598,8 @@ Always use the exact format above. Start with "Thought:"."""
     def _format_task_input(self, task_input: Dict[str, Any]) -> str:
         """Format task input for VQA processing."""
         query = task_input.get("query", "")
+        # Process the query to extract only useful information
+        query = self._process_user_query(query)
         image_path = task_input.get("image_path", "")
         medical_context = task_input.get("medical_context", {})
         rag_result = task_input.get("rag_result", {})
@@ -453,6 +642,10 @@ Begin with medical image analysis:"""
 
     def _execute_tool(self, action: str, action_input: Dict[str, Any]) -> str:
         """Execute tool with improved image handling."""
+        # Process query if this is the LLaVA tool
+        if action == "llava_vqa" and "query" in action_input:
+            action_input["query"] = self._process_user_query(action_input["query"])
+            
         # If the tool is llava_vqa, ensure image_path is included if available
         if action == "llava_vqa" and hasattr(self, 'current_task_input'):
             # Check if image_path exists in current task input but not in action input
@@ -471,3 +664,46 @@ Begin with medical image analysis:"""
         except Exception as e:
             self.logger.error(f"Tool execution error: {str(e)}")
             return f"Error executing {action}: {str(e)}"
+
+    def _process_user_query(self, query: str) -> str:
+        """
+        Process user query to extract only useful medical information.
+        
+        This function removes unnecessary conversational elements, greetings,
+        and focuses on extracting the core medical question or request.
+        
+        Args:
+            query: The original user query
+            
+        Returns:
+            Processed query containing only useful medical information
+        """
+        try:
+            # Use the LLM to extract only the relevant medical information
+            extraction_messages = [
+                SystemMessage(content="""You are a medical query processor. Your task is to extract ONLY the 
+                medically relevant information from user queries. Remove greetings, pleasantries, 
+                conversational elements, and any non-medical content. Focus on symptoms, medical conditions, 
+                diagnostic questions, or specific medical information requests. Return ONLY the 
+                processed medical query without any explanation or additional text."""),
+                HumanMessage(content=f"Original query: {query}\n\nExtract only the medically relevant information:")
+            ]
+            
+            extraction_response = self.llm.invoke(extraction_messages)
+            processed_query = extraction_response.content.strip()
+            
+            # Log the query transformation
+            self.logger.info(f"Query transformation - Original: '{query[:50]}...', Processed: '{processed_query[:50]}...'")
+            
+            # If the processed query is empty or significantly shorter than the original,
+            # fall back to the original to avoid losing important information
+            if not processed_query or len(processed_query) < len(query) * 0.3:
+                self.logger.warning("Processed query too short, falling back to original")
+                return query
+                
+            return processed_query
+            
+        except Exception as e:
+            self.logger.error(f"Query processing error: {str(e)}")
+            # On error, return the original query to ensure functionality
+            return query

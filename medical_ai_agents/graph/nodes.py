@@ -331,6 +331,9 @@ def _mark_task_completed(state: SystemState, completed_task: str) -> SystemState
     """Mark a task as completed - FIXED VERSION"""
     
     # CRITICAL: Don't create new dict, modify existing state
+    print("--------------------------------")
+    print(f"🔧 DEBUG: state _mark_task_completed {state.get('completed_tasks')}")
+    print("--------------------------------")
     completed_tasks = list(state.get("completed_tasks", []))
     execution_order = state.get("execution_order", [])
     
@@ -361,16 +364,16 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
     # Extract conversation history for debugging
     conversation_history = state.get("conversation_history", [])
     
-    logger.info(f"Synthesizer received conversation history: {len(conversation_history)} entries")
-    if conversation_history:
-        logger.info(f"First history entry: {conversation_history[0].get('query', 'Unknown')[:30]}...")
-        logger.info(f"Last history entry: {conversation_history[-1].get('query', 'Unknown')[:30]}...")
-        
-        # Log each entry for detailed debugging
-        for i, entry in enumerate(conversation_history[-2:]):  # Show last 2 entries
-            logger.info(f"History entry {i}: query='{entry.get('query', 'None')[:30]}...', "
-                         f"is_system={entry.get('is_system', False)}, "
-                         f"is_pending={entry.get('is_pending', False)}")
+    # logger.info(f"Synthesizer received conversation history: {len(conversation_history)} entries")
+    # if conversation_history:
+    #     logger.info(f"First history entry: {conversation_history[0].get('query', 'Unknown')[:30]}...")
+    #     logger.info(f"Last history entry: {conversation_history[-1].get('query', 'Unknown')[:30]}...")
+    #     
+    #     # Log each entry for detailed debugging
+    #     for i, entry in enumerate(conversation_history[-2:]):  # Show last 2 entries
+    #         logger.info(f"History entry {i}: query='{entry.get('query', 'None')[:30]}...', "
+    #                      f"is_system={entry.get('is_system', False)}, "
+    #                      f"is_pending={entry.get('is_pending', False)}")
     
     # Extract state parameters
     current_query = state.get("query", "")
@@ -390,19 +393,31 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
         conversation_history = [entry for entry in conversation_history if not entry.get("is_pending", False)]
         # Update the state with cleaned history
         state["conversation_history"] = conversation_history
-        logger.info(f"Cleaned conversation history, removed pending entries. Now has {len(conversation_history)} entries.")
+        # logger.info(f"Cleaned conversation history, removed pending entries. Now has {len(conversation_history)} entries.")
     
-    logger.info(f"CONVERSATION HISTORY ENTRIES: {len(conversation_history)}")
-    if conversation_history:
-        for i, entry in enumerate(conversation_history[-10:]):  # Show last 10 entries thay vì 3
-            logger.info(f"HISTORY ENTRY {i}:")
-            logger.info(f"  - QUERY: {entry.get('query', 'None')[:50]}...")
-            resp = entry.get('response', 'None')
-            if resp and len(resp) > 50:
-                resp = resp[:50] + "..."
-            logger.info(f"  - RESPONSE: {resp}")
-            logger.info(f"  - TIMESTAMP: {entry.get('timestamp', 'None')}")
-            logger.info(f"  - IS_SYSTEM: {entry.get('is_system', False)}")
+    # logger.info(f"CONVERSATION HISTORY ENTRIES: {len(conversation_history)}")
+    # if conversation_history:
+    #     for i, entry in enumerate(conversation_history):
+    #         logger.info(f"HISTORY ENTRY {i}:")
+    #         logger.info(f"  - QUERY: {entry.get('query', 'None')[:50]}...")
+    #         logger.info(f"  - RESPONSE: {entry.get('response', 'None')[:50]}...")
+    #         logger.info(f"  - TIMESTAMP: {entry.get('timestamp', 'None')}")
+    
+    # if conversation_history:
+    #     logger.info(f"First history entry: {conversation_history[0].get('query', 'Unknown')[:30]}...")
+    #     logger.info(f"Last history entry: {conversation_history[-1].get('query', 'Unknown')[:30]}...")
+    #     
+    #     # Add detailed logging of conversation pairs
+    #     logger.info("=" * 50)
+    #     logger.info("CONVERSATION HISTORY PAIRS:")
+    #     for i, entry in enumerate(conversation_history):
+    #         is_system = entry.get("is_system", False)
+    #         entry_type = "SYSTEM" if is_system else "USER"
+    #         logger.info(f"ENTRY {i} [{entry_type}]:")
+    #         logger.info(f"  - QUERY: {entry.get('query', 'None')[:50]}...")
+    #         logger.info(f"  - RESPONSE: {entry.get('response', 'None')[:50]}...")
+    #         logger.info(f"  - TIMESTAMP: {entry.get('timestamp', 'None')}")
+    #     logger.info("=" * 50)
     
     # Available results
     agent_results_keys = []
@@ -425,22 +440,22 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
     processing_time = time.time() - start_time
     
     # Debug information about conversation history
-    logger.info(f"Synthesizer received conversation history: {len(conversation_history)} entries")
-    if conversation_history:
-        logger.info(f"First history entry: {conversation_history[0].get('query', 'Unknown')[:30]}...")
-        logger.info(f"Last history entry: {conversation_history[-1].get('query', 'Unknown')[:30]}...")
-        
-        # Add detailed logging of conversation pairs
-        logger.info("=" * 50)
-        logger.info("CONVERSATION HISTORY PAIRS:")
-        for i, entry in enumerate(conversation_history):
-            is_system = entry.get("is_system", False)
-            entry_type = "SYSTEM" if is_system else "USER"
-            logger.info(f"ENTRY {i} [{entry_type}]:")
-            logger.info(f"  - QUERY: {entry.get('query', 'None')[:50]}...")
-            logger.info(f"  - RESPONSE: {entry.get('response', 'None')[:50]}...")
-            logger.info(f"  - TIMESTAMP: {entry.get('timestamp', 'None')}")
-        logger.info("=" * 50)
+    # logger.info(f"Synthesizer received conversation history: {len(conversation_history)} entries")
+    # if conversation_history:
+    #     logger.info(f"First history entry: {conversation_history[0].get('query', 'Unknown')[:30]}...")
+    #     logger.info(f"Last history entry: {conversation_history[-1].get('query', 'Unknown')[:30]}...")
+    #     
+    #     # Add detailed logging of conversation pairs
+    #     logger.info("=" * 50)
+    #     logger.info("CONVERSATION HISTORY PAIRS:")
+    #     for i, entry in enumerate(conversation_history):
+    #         is_system = entry.get("is_system", False)
+    #         entry_type = "SYSTEM" if is_system else "USER"
+    #         logger.info(f"ENTRY {i} [{entry_type}]:")
+    #         logger.info(f"  - QUERY: {entry.get('query', 'None')[:50]}...")
+    #         logger.info(f"  - RESPONSE: {entry.get('response', 'None')[:50]}...")
+    #         logger.info(f"  - TIMESTAMP: {entry.get('timestamp', 'None')}")
+    #     logger.info("=" * 50)
     
     # Check if it's a general (non-medical) query
     is_general_query = "general_query" in state.get("required_tasks", [])

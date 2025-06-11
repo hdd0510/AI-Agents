@@ -31,47 +31,36 @@ class EnhancedMedicalAISystem:
                medical_context: Optional[Dict[str, Any]] = None,
                conversation_history: Optional[List[Dict[str, Any]]] = None,
                session_id: Optional[str] = None) -> Dict[str, Any]:
-        """Enhanced analyze method with improved session tracking and conversation history."""
-        import os
-        import time
-        import json
-        import uuid
-        
-        # Log basic information about the request
-        self.logger.info(f"Starting analysis: image={image_path is not None}, text_query={query is not None}")
-        
-        # Check if we have a conversation history
+        """
+        Main analysis method that dispatches to appropriate workflow.
+        """
+        # Ensure we have a valid conversation history
         if conversation_history is None:
             conversation_history = []
-        self.logger.info(f"Initial conversation history length: {len(conversation_history)}")
-
-        # 1. IMPORTANT SESSION ID HANDLING
-        # If we don't have a session_id parameter, try to extract it from conversation_history
-        if not session_id and conversation_history:
-            # Try to find session_id from conversation history
+        
+        # self.logger.info(f"Initial conversation history length: {len(conversation_history)}")
+        
+        # If no session_id provided, try to extract from conversation history
+        if session_id is None and conversation_history:
             for entry in conversation_history:
-                if entry and isinstance(entry, dict) and "session_id" in entry:
+                if "session_id" in entry:
                     session_id = entry["session_id"]
-                    self.logger.info(f"Extracted session_id from conversation history: {session_id}")
+                    # self.logger.info(f"Extracted session_id from conversation history: {session_id}")
                     break
         
-        # If still no session_id, generate a new one
-        if not session_id:
+        # If still no session_id, generate one
+        if session_id is None:
             session_id = str(uuid.uuid4())
-            self.logger.info(f"Generated new session_id: {session_id}")
-        else:
-            self.logger.info(f"Using provided or extracted session_id: {session_id}")
+            self.logger.info(f"Generated new session ID: {session_id}")
         
-        # Log the history we found
-        if conversation_history:
-            self.logger.info(f"Conversation history contains {len(conversation_history)} entries")
-            if len(conversation_history) > 0:
-                last_entry = conversation_history[-1]
-                self.logger.info(f"Last entry: query='{last_entry.get('query', 'None')[:30]}...', response='{last_entry.get('response', 'None')[:30]}...'")
-        else:
-            # Initialize with system welcome message if this is a brand new conversation
-            self.logger.info("Initializing new conversation with system welcome message")
-            conversation_history = [{
+        # Debug conversation history
+        # self.logger.info(f"Conversation history contains {len(conversation_history)} entries")
+        
+        # Initialize history with system welcome message if empty
+        history = conversation_history
+        if not history:
+            # self.logger.info("Initializing new conversation with system welcome message")
+            history = [{
                 "query": "",  # Empty query because this isn't a user question
                 "response": "Hello! I'm your Medical AI Assistant specializing in healthcare consultation. How can I assist you with your medical questions today?",
                 "timestamp": time.time(),
@@ -79,7 +68,7 @@ class EnhancedMedicalAISystem:
                 "type": "init",  # Add a type to identify this as initialization
                 "session_id": session_id  # Add session_id to the initial system message
             }]
-            self.logger.info(f"System welcome message added to history - New history length: {len(conversation_history)}")
+            # self.logger.info(f"System welcome message added to history - New history length: {len(history)}")
         
         # Validate inputs
         if not image_path and not query:
@@ -121,19 +110,19 @@ class EnhancedMedicalAISystem:
         else:
             self.logger.info(f"No history found, using new session ID: {session_id}")
             
-        # Debug information about conversation history
-        self.logger.info(f"Conversation history received: {len(history)} entries")
+        # Debug conversation history
+        # self.logger.info(f"Conversation history received: {len(history)} entries")
+        
         if history and len(history) > 0:
             # Log the content of each entry in history for debugging
-            for i, entry in enumerate(history):
-                self.logger.info(f"History entry {i}: query='{entry.get('query', 'None')[:30]}...', "
-                                f"is_system={entry.get('is_system', False)}, "
-                                f"is_pending={entry.get('is_pending', False)}")
+            # for i, entry in enumerate(history):
+            #     self.logger.info(f"History entry {i}: query='{entry.get('query', 'None')[:30]}...', "
+            #                     f"is_system={entry.get('is_system', False)}, "
+            #                     f"is_pending={entry.get('is_pending', False)}")
             
-            self.logger.info(f"Last conversation entry: {history[-1].get('query', 'No query')[:30]}... - {history[-1].get('timestamp', 'No timestamp')}")
-        else:
+            # self.logger.info(f"Last conversation entry: {history[-1].get('query', 'No query')[:30]}... - {history[-1].get('timestamp', 'No timestamp')}")
             # Initialize with system welcome message if this is a brand new conversation
-            self.logger.info("Initializing new conversation with system welcome message")
+            # self.logger.info("Initializing new conversation with system welcome message")
             history = [{
                 "query": "",  # Empty query because this isn't a user question
                 "response": "Hello! I'm your Medical AI Assistant specializing in healthcare consultation. How can I assist you with your medical questions today?",
@@ -142,40 +131,30 @@ class EnhancedMedicalAISystem:
                 "type": "init",  # Add a type to identify this as initialization
                 "session_id": session_id  # Add session_id to the initial system message
             }]
-            self.logger.info(f"System welcome message added to history - New history length: {len(history)}")
+            # self.logger.info(f"System welcome message added to history - New history length: {len(history)}")
+        
+        # Clean up any pending entries that match the current query
+        if query:
+            history = [entry for entry in history if not (entry.get("is_pending", False) and entry.get("query") == query)]
+            # self.logger.info(f"After removing pending entries, history length: {len(history)}")
             
-        # For debugging purposes, temporarily append the current query but without a response
-        # This helps us track the query flow through the system
-        if query:  # Only add if there's an actual query
-            # Clean up any previous pending entries to avoid duplicates
-            pending_entries = [entry for entry in history if entry.get("is_pending", False)]
-            if pending_entries:
-                self.logger.info(f"Found {len(pending_entries)} pending entries, removing them")
-                history = [entry for entry in history if not entry.get("is_pending", False)]
-                self.logger.info(f"After removing pending entries, history length: {len(history)}")
-            
-            # Add the pending entry for current query
-            debug_entry = {
+            # Add current query as pending entry for debugging purposes
+            history.append({
                 "query": query,
-                "response": "[PENDING RESPONSE]",
+                "response": "Processing...",
                 "timestamp": time.time(),
-                "is_pending": True,  # Marked as pending so we know it's temporary
-                "session_id": session_id  # Make sure to include session_id here
-            }
-            history.append(debug_entry)
-            self.logger.info(f"Added current query to history for debugging: {query[:30]}...")
-            self.logger.info(f"History now has {len(history)} entries with pending entry")
-            
-            # IMPORTANT: Also track the raw query in the state for better tracking
-            # This ensures we have the query in multiple places for redundancy
-            initial_state_query = query  # Store query for initial state
+                "is_pending": True,
+                "session_id": session_id
+            })
+            # self.logger.info(f"Added current query to history for debugging: {query[:30]}...")
+            # self.logger.info(f"History now has {len(history)} entries with pending entry")
         else:
-            initial_state_query = ""  # Empty string if no query
-            self.logger.info("No query provided, not adding pending entry to history")
+            # self.logger.info("No query provided, not adding pending entry to history")
+            pass
         
         initial_state: SystemState = {
             "image_path": image_path or "",
-            "query": initial_state_query,  # Use the stored query variable
+            "query": query,
             "raw_query": query,  # Add raw query for redundancy
             "medical_context": medical_context,
             "session_id": session_id,

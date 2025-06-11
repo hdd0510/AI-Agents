@@ -11,6 +11,7 @@ Synthesis without looking at images (text-only analysis)
 import json
 import logging
 import re
+import os
 from typing import Dict, Any, List, Optional, Tuple
 from langchain_core.messages import SystemMessage, HumanMessage
 
@@ -95,7 +96,7 @@ STRICT REACT FORMAT:
 Every step MUST follow this exact format:
 Thought: [your reasoning]
 Action: [tool name or "Final Answer"]
-Action Input: [JSON parameters]
+Action Input: ["image_path": "{{path_to_image}}"]
 
 FINAL STEP FORMAT:
 You MUST end with EXACTLY this format (use Final Answer with capital letters):
@@ -415,6 +416,27 @@ Hãy đưa ra nhận định lâm sàng, ý nghĩa kết quả và khuyến ngh�
             llm_answer = self.llm.invoke([{"role": "user", "content": prompt}]).content.strip()
         except Exception as e:
             llm_answer = "Không thể tạo nhận định tự động: " + str(e)
+        
+        # Store current task input for image base64 inclusion
+        task_input = getattr(self, 'current_task_input', {})
+        
+        # Include base64 string representation of the image (not the actual image)
+        image_base64_info = self._include_image_base64_in_synthesis(
+            task_input=task_input,
+            class_name=class_name,
+            confidence=confidence,
+            all_classes=all_classes
+        )
+        
+        # Create synthesis with text and base64 string
+        synthesis = self._perform_text_synthesis(
+            class_name=class_name,
+            confidence=confidence,
+            all_classes=all_classes,
+            llm_answer=llm_answer,
+            requirements_met=requirements_met,
+            image_base64_info=image_base64_info
+        )
             
         classifier_result = {
             "success": True,
@@ -425,11 +447,13 @@ Hãy đưa ra nhận định lâm sàng, ý nghĩa kết quả và khuyến ngh�
             "description": description,
             "all_classes": all_classes,
             "analysis": llm_answer,
+            "synthesis": synthesis,
             "core_requirements_met": requirements_met,
             "steps_used": steps_used,
-            "synthesis_method": "llm_natural_language",
+            "synthesis_method": "text_with_base64_string",
             "final_answer_format": "structured" if final_answer_data else "unstructured",
-            "is_low_confidence": is_low_confidence
+            "is_low_confidence": is_low_confidence,
+            "has_image_base64_info": bool(image_base64_info and image_base64_info != "No image available for base64 encoding")
         }
         
         if self.classifier_type == "modality":
@@ -443,7 +467,7 @@ Hãy đưa ra nhận định lâm sàng, ý nghĩa kết quả và khuyến ngh�
 
     def _perform_text_synthesis(self, class_name: str, confidence: float, 
                              all_classes: Dict[str, float], llm_answer: str,
-                             requirements_met: Dict[str, bool]) -> str:
+                             requirements_met: Dict[str, bool], image_base64_info: str = "") -> str:
         """
         Perform TEXT-ONLY synthesis without looking at images.
         Analyze tool results and LLM reasoning only.
@@ -519,7 +543,14 @@ The model's confidence is below threshold ({confidence:.1%}). LLM assessment:
 
 """
             
-            synthesis += "Synthesis Method: Text-only analysis of tool results (no image review required)"
+            # Add image base64 information if available
+            if image_base64_info and image_base64_info != "No image available for base64 encoding":
+                synthesis += f"""
+Image Information (base64 string only, not actual image):
+{image_base64_info}
+"""
+            
+            synthesis += "Synthesis Method: Text-only analysis with image base64 string reference (no direct image viewing)"
             
             return synthesis
             
@@ -583,6 +614,8 @@ The model's confidence is below threshold ({confidence:.1%}). LLM assessment:
     def _run_react_loop(self, task_input: Dict[str, Any]) -> Dict[str, Any]:
         """Custom ReAct loop with better final answer handling for classifier."""
         self.react_history = []
+        # Store task_input for later use in synthesis
+        self.current_task_input = task_input
         
         for i in range(1, self.max_iterations + 1):
             # Get LLM response
@@ -746,10 +779,58 @@ The model's confidence is below threshold ({confidence:.1%}). LLM assessment:
                 input_val = json.loads(a_input.group(1))
                 print(f"🔍 DEBUG: Parsed action input JSON")
             except Exception as e:
+                print(f"🔍 DEBUG: a_input {a_input}")
                 print(f"🔍 DEBUG: Failed to parse action input JSON: {str(e)}")
                         
         print(f"🔍 FINAL PARSE RESULT - thought: {'Found' if thought_val else 'None'}, action: {action_val}")
         return thought_val, action_val, input_val
+
+    def _include_image_base64_in_synthesis(self, task_input: Dict[str, Any], class_name: str, 
+                                         confidence: float, all_classes: Dict[str, float]) -> str:
+        """
+        Include the base64 string of the image in the synthesis, but not show the actual image.
+        This provides the base64 string for reference only.
+        """
+        try:
+            import base64
+            from PIL import Image
+            from io import BytesIO
+            
+            image_path = task_input.get("image_path", "")
+            has_image = bool(image_path and os.path.exists(image_path))
+            
+            if not has_image:
+                return "No image available for base64 encoding"
+            
+            # Convert image to base64 string
+            try:
+                with Image.open(image_path) as img:
+                    buffered = BytesIO()
+                    img.save(buffered, format="PNG")
+                    img_b64 = base64.b64encode(buffered.getvalue()).decode()
+                    
+                    # Truncate base64 string if too long
+                    if len(img_b64) > 100:
+                        img_b64_preview = img_b64[:50] + "..." + img_b64[-50:]
+                    else:
+                        img_b64_preview = img_b64
+                    
+                    # Create a message with image info but not the actual image
+                    image_info = f"""
+Image Information:
+- Path: {image_path}
+- Size: {img.size[0]}x{img.size[1]} pixels
+- Format: {img.format if hasattr(img, 'format') else 'Unknown'}
+- Base64 (truncated): {img_b64_preview}
+- Classification: {class_name} ({confidence:.1%})
+"""
+                    return image_info
+                    
+            except Exception as e:
+                return f"Failed to encode image as base64: {str(e)}"
+                
+        except Exception as e:
+            return f"Error processing image: {str(e)}"
 
 # ===== USAGE EXAMPLE =====
 def test_guided_adaptive_classifier():

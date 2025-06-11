@@ -121,12 +121,40 @@ class BaseAgent(ABC):
             return f"Error executing {name}: {e}"
 
     def _create_react_messages(self, task_input: Dict[str, Any]) -> List[Any]:
-        msgs = [SystemMessage(content=self._get_system_prompt()), HumanMessage(content=self._format_task_input(task_input))]
+        """Create messages for LLM with proper handling of history and images."""
+        # Start with system prompt and task input
+        msgs = [
+            SystemMessage(content=self._get_system_prompt()), 
+            HumanMessage(content=self._format_task_input(task_input))
+        ]
+        
+        # Add history if available
         if self.react_history:
             hist = []
-            for s in self.react_history[-5:]:
-                hist.append(f"Thought: {s.thought}\nAction: {s.action}\nAction Input: {json.dumps(s.action_input)}\nObservation: {s.observation[:120] if s.observation else ''}")
+            for s in self.react_history[-5:]:  # Only use last 5 steps to avoid context length issues
+                hist_text = f"Thought: {s.thought}\nAction: {s.action}\nAction Input: {json.dumps(s.action_input)}\nObservation: {s.observation[:120] if s.observation else ''}"
+                hist.append(hist_text)
             msgs.append(AIMessage(content="\n".join(hist)))
+        
+        # Add image only on first iteration (when react_history is empty)
+        # This avoids repeatedly showing the same image in every iteration
+        if "image_path" in task_input and not self.react_history:
+            import base64
+            import os
+            if os.path.exists(task_input['image_path']):
+                try:
+                    with open(task_input['image_path'], 'rb') as img_file:
+                        img_data = base64.b64encode(img_file.read()).decode()
+                        # Add a reminder about the image path to help the model remember it
+                        image_reminder = f"Image path: {task_input['image_path']}"
+                        msgs.append(HumanMessage(content=[
+                            {"type": "text", "text": image_reminder},
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_data}"}}
+                        ]))
+                        self.logger.info(f"Added image to messages: {task_input['image_path']}")
+                except Exception as e:
+                    self.logger.error(f"Error loading image: {str(e)}")
+        
         return msgs
 
     def _run_react_loop(self, task_input: Dict[str, Any]) -> Dict[str, Any]:
@@ -171,7 +199,6 @@ class BaseAgent(ABC):
             task_input = self._extract_task_input(state)
             result = self._run_react_loop(task_input)
             agent_out = self._format_agent_result(result)
-            print(f"🔧 DEBUG: agent_out {agent_out}")
             return {**state, **agent_out}
         except Exception as e:
             err = f"Error in {self.name}: {e}\n{traceback.format_exc()}"

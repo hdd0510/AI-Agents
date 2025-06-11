@@ -1072,7 +1072,7 @@ def create_enhanced_chatbot():
                     
                     # If no matching entry, manually add this interaction to history
                     if not has_matching_entry:
-                        logger.info(f"Manually adding current interaction to conversation_history: '{original_message[:30]}...'")
+                        # logger.info(f"Manually adding current interaction to conversation_history: '{original_message[:30]}...'")
                         history_entry = {
                             "query": original_message,
                             "response": final_response,
@@ -1083,18 +1083,18 @@ def create_enhanced_chatbot():
                         # Add entry to conversation history
                         curr_history.append(history_entry)
                         session_state["conversation_history"] = curr_history
-                        logger.info(f"Conversation history updated manually, now has {len(curr_history)} entries")
+                        # logger.info(f"Conversation history updated manually, now has {len(curr_history)} entries")
                 
                 # Debug - log final state of conversation history
                 conversation_history = session_state.get("conversation_history", [])
-                logger.info(f"FINAL conversation_history has {len(conversation_history)} entries")
-                if conversation_history:
-                    for i, entry in enumerate(conversation_history[:]):  # Show last 2 entries
-                        logger.info(f"FINAL HISTORY ENTRY {i}:")
-                        logger.info(f"  - QUERY: {entry.get('query', 'None')[:30]}...")
-                        resp = entry.get('response', 'None')
-                        resp_preview = resp[:30] + "..." if resp and len(resp) > 30 else resp
-                        logger.info(f"  - RESPONSE: {resp_preview}")
+                # logger.info(f"FINAL conversation_history has {len(conversation_history)} entries")
+                # if conversation_history:
+                #     for i, entry in enumerate(conversation_history[:]):  # Show last 2 entries
+                #         logger.info(f"FINAL HISTORY ENTRY {i}:")
+                #         logger.info(f"  - QUERY: {entry.get('query', 'None')[:30]}...")
+                #         resp = entry.get('response', 'None')
+                #         resp_preview = resp[:30] + "..." if resp and len(resp) > 30 else resp
+                #         logger.info(f"  - RESPONSE: {resp_preview}")
                 
                 # Save important interactions to long term
                 if has_image or "polyp" in original_message.lower() or "medical" in original_message.lower():
@@ -1355,15 +1355,15 @@ def create_enhanced_chatbot():
             os.makedirs(history_dir, exist_ok=True)
             
             history_file = os.path.join(history_dir, f"{session_id}.json")
-            logger.info(f"[LOAD] Checking for conversation history file: {history_file}")
+            # logger.info(f"[LOAD] Checking for conversation history file: {history_file}")
             
             if not os.path.exists(history_file):
-                logger.info(f"No conversation history file found for session {session_id}")
+                # logger.info(f"No conversation history file found for session {session_id}")
                 return []
                 
             try:
                 with open(history_file, "r") as f:
-                    logger.info(f"[LOAD] Reading conversation history file for session {session_id}")
+                    # logger.info(f"[LOAD] Reading conversation history file for session {session_id}")
                     conversation_history = json.load(f)
                     
                     # Validate format
@@ -1371,7 +1371,7 @@ def create_enhanced_chatbot():
                         logger.error(f"Invalid conversation history format, expected list but got {type(conversation_history)}")
                         return []
                         
-                    logger.info(f"[LOAD] Loaded {len(conversation_history)} entries from conversation history")
+                    # logger.info(f"[LOAD] Loaded {len(conversation_history)} entries from conversation history")
                     return conversation_history
             except Exception as e:
                 logger.error(f"Error loading conversation history: {str(e)}")
@@ -1392,7 +1392,7 @@ def create_enhanced_chatbot():
                 with open(history_file, "w") as f:
                     json.dump(conversation_history, f, ensure_ascii=False, indent=2)
                     
-                logger.info(f"[SAVE] Saved {len(conversation_history)} entries to conversation history")
+                # logger.info(f"[SAVE] Saved {len(conversation_history)} entries to conversation history")
                 return True
             except Exception as e:
                 logger.error(f"Error saving conversation history: {str(e)}")

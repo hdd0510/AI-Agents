@@ -499,13 +499,13 @@ class MedicalAIChatbot:
             conversation_history = session_memory.get("conversation_history", [])
             
             # Debug conversation history state
-            logger.info(f"[MEMORY] Processing message, current conversation history has {len(conversation_history)} entries")
-            if len(conversation_history) > 0:
-                logger.info(f"[MEMORY] Last history entry: {conversation_history[-1].get('query', 'NO_QUERY')[:30]}...")
+            # logger.info(f"[MEMORY] Processing message, current conversation history has {len(conversation_history)} entries")
+            # if len(conversation_history) > 0:
+            #     logger.info(f"[MEMORY] Last history entry: {conversation_history[-1].get('query', 'NO_QUERY')[:30]}...")
             
             # Initialize system message if this is a new conversation
             if not conversation_history:
-                logger.info("[MEMORY] Initializing new conversation history")
+                # logger.info("[MEMORY] Initializing new conversation history")
                 # Add a welcome message as the first system message
                 conversation_history.append({
                     "query": "",  # Empty query because this isn't a user question
@@ -515,7 +515,7 @@ class MedicalAIChatbot:
                     "type": "init"  # Add a type to identify this as initialization
                 })
                 session_memory["conversation_history"] = conversation_history
-                logger.info(f"[MEMORY] Added system welcome message, history now has {len(conversation_history)} entries")
+                # logger.info(f"[MEMORY] Added system welcome message, history now has {len(conversation_history)} entries")
             
             # Get contextual information
             context = self.memory.get_contextual_prompt(session_id, user_id)
@@ -534,16 +534,15 @@ class MedicalAIChatbot:
                 
                 analysis_result = result
                 
-                # Debug conversation history before and after
-                logger.info(f"[IMAGE] Memory conversation history BEFORE: {len(conversation_history)} entries")
-                if conversation_history:
-                    for i, entry in enumerate(conversation_history[-2:]):  # Show last 2 entries
-                        logger.info(f"[IMAGE] BEFORE - ENTRY {i}:")
-                        logger.info(f"  - TYPE: {'SYSTEM' if entry.get('is_system', False) else 'USER'}")
-                        logger.info(f"  - QUERY: {entry.get('query', 'None')[:30]}...")
-                        resp = entry.get('response', 'None')
-                        resp_preview = resp[:30] + "..." if resp and len(resp) > 30 else resp
-                        logger.info(f"  - RESPONSE: {resp_preview}")
+                # Debug conversation history state before calling AI system
+                # logger.info(f"[IMAGE] Memory conversation history BEFORE: {len(conversation_history)} entries")
+                # if conversation_history:
+                #     for i, entry in enumerate(conversation_history[-1:]):  # Show last entry
+                #         logger.info(f"[IMAGE] BEFORE - ENTRY {i}:")
+                #         logger.info(f"  - QUERY: {entry.get('query', 'None')[:30]}...")
+                #         resp = entry.get('response', 'None')
+                #         resp_preview = resp[:30] + "..." if resp and len(resp) > 30 else resp
+                #         logger.info(f"  - RESPONSE: {resp_preview}")
                 
                 # Update conversation history from the system response
                 if "conversation_history" in result:
@@ -551,7 +550,8 @@ class MedicalAIChatbot:
                     clean_history = []
                     for entry in conversation_history:
                         if entry.get("is_pending", False) and entry.get("query") == message:
-                            logger.info(f"Removing pending entry for query: {message[:30]}...")
+                            # logger.info(f"Removing pending entry for query: {message[:30]}...")
+                            pass
                         else:
                             clean_history.append(entry)
                     
@@ -561,21 +561,21 @@ class MedicalAIChatbot:
                         latest_entry = result["conversation_history"][-1]
                         if latest_entry.get("query") == message:
                             new_entries.append(latest_entry)
-                            logger.info(f"Adding new complete entry for query: {message[:30]}...")
+                            # logger.info(f"Adding new complete entry for query: {message[:30]}...")
                     
                     # Create final merged history
                     conversation_history = clean_history + new_entries
                     session_memory["conversation_history"] = conversation_history
                     
                     # Debug updated conversation history
-                    logger.info(f"[IMAGE] Memory conversation history AFTER: {len(conversation_history)} entries")
-                    if conversation_history:
-                        for i, entry in enumerate(conversation_history[-1:]):  # Show last entry
-                            logger.info(f"[IMAGE] AFTER - ENTRY {i}:")
-                            logger.info(f"  - QUERY: {entry.get('query', 'None')[:30]}...")
-                            resp = entry.get('response', 'None')
-                            resp_preview = resp[:30] + "..." if resp and len(resp) > 30 else resp
-                            logger.info(f"  - RESPONSE: {resp_preview}")
+                    # logger.info(f"[IMAGE] Memory conversation history AFTER: {len(conversation_history)} entries")
+                    # if conversation_history:
+                    #     for i, entry in enumerate(conversation_history[-1:]):  # Show last entry
+                    #         logger.info(f"[IMAGE] AFTER - ENTRY {i}:")
+                    #         logger.info(f"  - QUERY: {entry.get('query', 'None')[:30]}...")
+                    #         resp = entry.get('response', 'None')
+                    #         resp_preview = resp[:30] + "..." if resp and len(resp) > 30 else resp
+                    #         logger.info(f"  - RESPONSE: {resp_preview}")
                 
                 if result.get("success", False):
                     # Chỉ hiển thị final_answer nếu có
@@ -636,16 +636,16 @@ class MedicalAIChatbot:
                 
                 analysis_result = result
                 
-                # Debug conversation history before and after
-                logger.info(f"Memory conversation history BEFORE: {len(conversation_history)} entries")
-                if conversation_history:
-                    for i, entry in enumerate(conversation_history[-2:]):  # Show last 2 entries
-                        logger.info(f"BEFORE - ENTRY {i}:")
-                        logger.info(f"  - TYPE: {'SYSTEM' if entry.get('is_system', False) else 'USER'}")
-                        logger.info(f"  - QUERY: {entry.get('query', 'None')[:30]}...")
-                        resp = entry.get('response', 'None')
-                        resp_preview = resp[:30] + "..." if resp and len(resp) > 30 else resp
-                        logger.info(f"  - RESPONSE: {resp_preview}")
+                # Debug conversation history state before calling AI system
+                # logger.info(f"Memory conversation history BEFORE: {len(conversation_history)} entries")
+                # if conversation_history:
+                #     for i, entry in enumerate(conversation_history[-2:]):  # Show last 2 entries
+                #         logger.info(f"BEFORE - ENTRY {i}:")
+                #         logger.info(f"  - TYPE: {'SYSTEM' if entry.get('is_system', False) else 'USER'}")
+                #         logger.info(f"  - QUERY: {entry.get('query', 'None')[:30]}...")
+                #         resp = entry.get('response', 'None')
+                #         resp_preview = resp[:30] + "..." if resp and len(resp) > 30 else resp
+                #         logger.info(f"  - RESPONSE: {resp_preview}")
                 
                 # Update conversation history from the system response
                 if "conversation_history" in result:
@@ -653,7 +653,8 @@ class MedicalAIChatbot:
                     clean_history = []
                     for entry in conversation_history:
                         if entry.get("is_pending", False) and entry.get("query") == message:
-                            logger.info(f"Removing pending entry for query: {message[:30]}...")
+                            # logger.info(f"Removing pending entry for query: {message[:30]}...")
+                            pass
                         else:
                             clean_history.append(entry)
                     
@@ -663,21 +664,21 @@ class MedicalAIChatbot:
                         latest_entry = result["conversation_history"][-1]
                         if latest_entry.get("query") == message:
                             new_entries.append(latest_entry)
-                            logger.info(f"Adding new complete entry for query: {message[:30]}...")
+                            # logger.info(f"Adding new complete entry for query: {message[:30]}...")
                     
                     # Create final merged history
                     conversation_history = clean_history + new_entries
                     session_memory["conversation_history"] = conversation_history
                     
                     # Debug updated conversation history
-                    logger.info(f"Memory conversation history AFTER: {len(conversation_history)} entries")
-                    if conversation_history:
-                        for i, entry in enumerate(conversation_history[-1:]):  # Show last entry
-                            logger.info(f"AFTER - ENTRY {i}:")
-                            logger.info(f"  - QUERY: {entry.get('query', 'None')[:30]}...")
-                            resp = entry.get('response', 'None')
-                            resp_preview = resp[:30] + "..." if resp and len(resp) > 30 else resp
-                            logger.info(f"  - RESPONSE: {resp_preview}")
+                    # logger.info(f"Memory conversation history AFTER: {len(conversation_history)} entries")
+                    # if conversation_history:
+                    #     for i, entry in enumerate(conversation_history[-1:]):  # Show last entry
+                    #         logger.info(f"AFTER - ENTRY {i}:")
+                    #         logger.info(f"  - QUERY: {entry.get('query', 'None')[:30]}...")
+                    #         resp = entry.get('response', 'None')
+                    #         resp_preview = resp[:30] + "..." if resp and len(resp) > 30 else resp
+                    #         logger.info(f"  - RESPONSE: {resp_preview}")
                 
                 if result.get("success", False) and "final_answer" in result:
                     response_parts.append("💬 **Response:**")

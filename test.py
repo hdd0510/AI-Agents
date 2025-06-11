@@ -1,7 +1,11 @@
 import json
 import re
 
-txt = 'Action Input: {"answer": {"class_name": "Ta_trang", "confidence": "99.9998%", "explanation": "The image was classified as Duodenum (Ta_trang) with high confidence, and validation confirmed this result with an even higher confidence level."}}'
+txt = """
+Thought: The classification of the image is based on the highest confidence classification while noting the validation insights.
+Action: Final Answer
+Action Input: {"answer": {"class_name": "BLI", "confidence": "100%", "explanation": "The initial classification of Blue Light Imaging (BLI) was made with high confidence, indicating enhanced visualization capabilities, which is suitable for polyp detection."}}
+"""
 
 a_input = re.search(r'Action Input:\s*(\{.*\})', txt, re.DOTALL)
 print(a_input)
