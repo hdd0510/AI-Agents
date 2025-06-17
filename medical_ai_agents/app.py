@@ -169,9 +169,7 @@ def create_enhanced_chatbot():
             self.app_config = config
             self.memory = LongShortTermMemory()
             self.medical_ai = self._initialize_medical_ai()
-            
-            # Đảm bảo thư mục persistent_sessions tồn tại
-            self._ensure_persistent_sessions_dir()
+
         
         def _sync_ui_history_with_conversation(self, history, conversation_history):
             """Đồng bộ hóa history UI với conversation_history để đảm bảo chúng khớp nhau."""
@@ -239,11 +237,24 @@ def create_enhanced_chatbot():
                 # Input components
                 with gr.Row():
                     with gr.Column(scale=4):
-                        msg = gr.Textbox(
-                            show_label=False,
-                            placeholder="Nhập câu hỏi về hình ảnh y tế hoặc hỏi tôi về các vấn đề y khoa...",
-                            container=False
-                        )
+                        with gr.Row():
+                            msg = gr.Textbox(
+                                show_label=False,
+                                placeholder="Nhập câu hỏi về hình ảnh y tế hoặc hỏi tôi về các vấn đề y khoa...",
+                                container=False,
+                                scale=5
+                            )
+                            # Thêm nút đính kèm tài liệu
+                            attach_btn = gr.Button("📎", size="sm", scale=1)
+                    
+                    # Vùng upload tài liệu (ẩn ban đầu)
+                    doc_upload = gr.File(
+                        label="📄 Đính kèm tài liệu (PDF, DOCX, TXT)",
+                        file_types=["pdf", "docx", "txt"],
+                        visible=False,
+                        elem_id="document_upload"
+                    )
+                    
                     with gr.Column(scale=1, min_width=100):
                         with gr.Row():
                             image = gr.UploadButton(
@@ -252,19 +263,20 @@ def create_enhanced_chatbot():
                                 type="filepath"
                             )
                         with gr.Row():
-                            image_status = gr.Textbox(
-                                show_label=False,
-                                placeholder="Chưa có ảnh",
-                                interactive=False,
-                                container=False,
-                                scale=1,
-                                min_width=100
+                            # Hiển thị trạng thái ảnh - đổi thành gr.Markdown và bỏ tham số scale
+                            image_status = gr.Markdown(
+                                "**Chưa có ảnh**"
                             )
+                            # Nút xóa ảnh riêng biệt
+                            clear_img_btn = gr.Button("❌ Xóa", size="sm", scale=1)
+                    
                     with gr.Column(scale=1, min_width=100):
                         submit = gr.Button("Submit", variant="primary")
                 
                 # State for session management
                 session_state = gr.State({})
+                # Thêm state riêng để theo dõi ảnh hiện tại
+                image_state = gr.State(None)
                 
                 # Auto-sync function to load history when interface is first loaded
                 def auto_sync_history(username):
@@ -307,67 +319,59 @@ def create_enhanced_chatbot():
                     # Nếu không tìm thấy session hoặc history
                     return [], new_state
                 
-                # Function to update image status
-                def update_image_status(image_path):
+                # Function to update image status với màu sắc tương phản rõ ràng
+                def update_image_status(image_path, current_state):
+                    # Lưu đường dẫn ảnh vào state
+                    new_state = image_path
+                    
                     if image_path:
                         file_name = os.path.basename(image_path)
-                        if len(file_name) > 15:
-                            file_name = file_name[:12] + "..."
-                        return f"✅ {file_name}"
-                    return "Chưa có ảnh"
+                        # Dùng markdown với màu chữ đậm, dễ nhìn
+                        return f"**✅ Đã tải: <span style='color: #2c7a4e; background: #e3f5ed; padding: 2px 5px; border-radius: 3px;'>{file_name}</span>**", new_state
+                    return "**Chưa có ảnh**", None
 
-                # CRITICAL FIX: Function to load a session that properly updates the session state with conversation history
-                def load_session_and_update_state(username, session_id, old_state):
-                    if not session_id or not username:
-                        logger.warning(f"Missing username or session_id in load_session_and_update_state")
-                        return [], old_state
-
-                    # Create new state based on old state
-                    new_state = old_state.copy() if old_state else {}
-                    
-                    # Update session_id in state
-                    new_state["session_id"] = session_id
-                    
-                    # Generate user_id
-                    user_id = self.generate_user_id(username)
-                    new_state["user_id"] = user_id
-                    
-                    # CRITICAL: Load conversation history into session state
-                    conversation_history = self._load_conversation_history(session_id)
-                    if conversation_history:
-                        new_state["conversation_history"] = conversation_history
-                        logger.info(f"load_session_and_update_state: Loaded {len(conversation_history)} conversation entries")
-                    else:
-                        # Initialize empty conversation history if none exists
-                        new_state["conversation_history"] = []
-                        logger.info("load_session_and_update_state: No conversation history found, initialized empty list")
-                    
-                    # Load UI history
-                    ui_history = self.load_previous_session(username, session_id)
-                    if not ui_history:
-                        # If no UI history exists, create from conversation_history
-                        ui_history = []
-                        for entry in conversation_history:
-                            query = entry.get("query")
-                            response = entry.get("response")
-                            if query and response:
-                                ui_history.append([query, response])
-                        logger.info(f"load_session_and_update_state: Created {len(ui_history)} UI history entries")
-                    
-                    # Save the persistent session ID
-                    self._save_persistent_session_id(username, session_id)
-                    
-                    logger.info(f"load_session_and_update_state: Session loaded and state updated with {len(conversation_history)} conversation entries")
-                    return ui_history, new_state
+                # Xử lý sự kiện xóa ảnh
+                def clear_image(current_state):
+                    # Reset cả image và state
+                    return None, "**Chưa có ảnh**", None
                 
-                # Events
+                # Kết nối events
                 image.upload(
                     fn=update_image_status,
-                    inputs=[image],
-                    outputs=[image_status],
+                    inputs=[image, image_state],
+                    outputs=[image_status, image_state],
                     queue=False
                 )
                 
+                clear_img_btn.click(
+                    fn=clear_image,
+                    inputs=[image_state],
+                    outputs=[image, image_status, image_state]
+                )
+                
+                # Handle document upload visibility toggle
+                def toggle_doc_upload(visible):
+                    return gr.update(visible=not visible)
+                
+                attach_btn.click(
+                    fn=toggle_doc_upload,
+                    inputs=[doc_upload],
+                    outputs=[doc_upload]
+                )
+                
+                # Handle document upload status
+                def update_doc_status(file):
+                    if file:
+                        return f"📄 Đã đính kèm: {file.name}"
+                    return ""
+                
+                doc_upload.change(
+                    fn=update_doc_status,
+                    inputs=[doc_upload],
+                    outputs=[msg]
+                )
+                
+                # Events
                 submit.click(
                     fn=self.process_message_streaming,
                     inputs=[msg, image, chatbot, username, session_state],
@@ -391,29 +395,30 @@ def create_enhanced_chatbot():
                 # Clear button
                 with gr.Row():
                     # Fix: Thêm session_state vào danh sách để clear
-                    clear_btn = gr.ClearButton([msg, chatbot, image, image_status], value="Clear Chat")
+                    clear_btn = gr.ClearButton([msg, chatbot, image, image_status, image_state], value="Clear Chat")
                     
                     # Thêm nút để đồng bộ hóa lịch sử
                     sync_history_btn = gr.Button("🔄 Sync History", variant="secondary")
                 
-                # Xử lý sự kiện clear để xóa triệt để dữ liệu
+                # Cập nhật hàm clear_handler để xử lý image_state
                 def clear_handler():
                     # Xóa dữ liệu session_state, conversation_history và file lịch sử nếu có
                     try:
-                        session_id = session_state.get("session_id") if isinstance(session_state, dict) else None
+                        session_id = self._get_session_value(session_state, "session_id")
                         username_val = username.value if hasattr(username, 'value') else None
-                        user_id = session_state.get("user_id") if isinstance(session_state, dict) else None
+                        user_id = self._get_session_value(session_state, "user_id")
                         
-                        # Xóa conversation_history trong session_state
-                        if isinstance(session_state, dict):
-                            # Reset hoàn toàn session_state về empty dict
-                            session_state.clear()
-                            # Tạo session_id mới để đảm bảo bắt đầu phiên mới hoàn toàn
-                            session_state["session_id"] = str(uuid.uuid4())
-                            session_state["conversation_history"] = []
-                            logger.info(f"Created new session ID: {session_state['session_id']}")
-                            
-                        # Xóa file history nếu có session_id
+                        # Xóa conversation_history trong session_state và tạo session mới
+                        # Thay vì truy cập trực tiếp, sử dụng _update_session_state
+                        new_session_id = str(uuid.uuid4())
+                        session_state = self._update_session_state(session_state, {
+                            "session_id": new_session_id,
+                            "conversation_history": [],
+                            "user_id": user_id  # Giữ nguyên user_id
+                        })
+                        logger.info(f"Created new session ID: {new_session_id}")
+                        
+                        # Xóa file history nếu có session_id cũ
                         if session_id:
                             import os
                             import shutil
@@ -471,35 +476,25 @@ def create_enhanced_chatbot():
                                 except Exception as e:
                                     logger.error(f"Error clearing memory: {e}")
                             
-                            # Xóa các ảnh tạm đã lưu
-                            try:
-                                temp_dir = os.path.join(os.path.dirname(__file__), '..', 'visualizations')
-                                if os.path.exists(temp_dir):
-                                    for file in os.listdir(temp_dir):
-                                        if session_id in file:
-                                            file_path = os.path.join(temp_dir, file)
-                                            try:
-                                                os.remove(file_path)
-                                                logger.info(f"Removed visualization file: {file_path}")
-                                            except Exception as e:
-                                                logger.error(f"Failed to remove visualization file: {e}")
-                            except Exception as e:
-                                logger.error(f"Error clearing visualization files: {e}")
-                                
                     except Exception as e:
                         logger.error(f"Error clearing chat data: {e}")
-                        
+                        # Tạo session mới ngay cả khi có lỗi
+                        session_state = self._update_session_state(session_state, {
+                            "session_id": str(uuid.uuid4()),
+                            "conversation_history": []
+                        })
+                    
                     # Thêm debug log
                     logger.info("Clear chat triggered - reset completed, all data cleared")
                     
                     # Trả về empty session và UI elements
-                    return {"session_id": str(uuid.uuid4()), "conversation_history": []}, "", [], None, "Chưa có ảnh"
+                    return session_state, "", [], None, "**Chưa có ảnh**", None
                 
                 # Kết nối nút clear với hàm xử lý
                 clear_btn.click(
                     fn=clear_handler,
                     inputs=[],
-                    outputs=[session_state, msg, chatbot, image, image_status]
+                    outputs=[session_state, msg, chatbot, image, image_status, image_state]
                 )
                 
                 # CRITICAL FIX: Thêm log để giúp debug conversation_history
@@ -527,11 +522,13 @@ def create_enhanced_chatbot():
                 # Xử lý sự kiện đồng bộ hóa lịch sử - FIXED
                 def sync_history_handler(history, username, session_state):
                     # Lấy session_id từ session_state hoặc từ persistent storage
-                    session_id = session_state.get("session_id")
+                    session_id = self._get_session_value(session_state, "session_id")
                     if not session_id:
                         session_id = self._load_persistent_session_id(username)
                         if session_id:
-                            session_state["session_id"] = session_id
+                            session_state = self._update_session_state(session_state, {
+                                "session_id": session_id
+                            })
                     
                     # Nếu không có session_id, không thể đồng bộ
                     if not session_id:
@@ -544,7 +541,9 @@ def create_enhanced_chatbot():
                         return history, session_state
                     
                     # CRITICAL FIX: Cập nhật session_state với conversation_history mới
-                    session_state["conversation_history"] = conversation_history
+                    session_state = self._update_session_state(session_state, {
+                        "conversation_history": conversation_history
+                    })
                     logger.info(f"FIXED: Loaded and updated conversation_history with {len(conversation_history)} entries")
                     
                     # CRITICAL FIX: Hiển thị thông tin bổ sung để debug
@@ -579,19 +578,6 @@ def create_enhanced_chatbot():
                     """)
                     
             return interface
-        
-        def _ensure_persistent_sessions_dir(self):
-            """Đảm bảo thư mục lưu trữ session ID tồn tại."""
-            import os
-            persistent_dir = os.path.join(os.path.dirname(__file__), '..', 'data', 'persistent_sessions')
-            os.makedirs(persistent_dir, exist_ok=True)
-            logger.info(f"Persistent sessions directory ensured: {persistent_dir}")
-
-        def _get_persistent_session_path(self, username: str) -> str:
-            """Lấy đường dẫn file lưu trữ session ID cho user."""
-            import os
-            user_id = self.generate_user_id(username)
-            return os.path.join(os.path.dirname(__file__), '..', 'data', 'persistent_sessions', f"{user_id}.txt")
             
         def _load_persistent_session_id(self, username: str) -> str:
             """Tải session ID đã lưu trữ nếu có."""
@@ -711,8 +697,23 @@ def create_enhanced_chatbot():
             logger.info(f"[DEBUG] Processing message: '{original_message[:50]}...'")
             
             # Generate session ID với persistent storage
-            session_id = session_state.get("session_id")
-            logger.info(f"[SESSION] Current session state keys: {list(session_state.keys())}")
+            # session_id = session_state.get("session_id")  # ❌ Lỗi: 'State' object has no attribute 'get'
+            
+            # Sửa lại cách truy cập session_state
+            if isinstance(session_state, dict):
+                session_id = session_state.get("session_id")
+            else:
+                # Nếu session_state là đối tượng Gradio State, không phải dict
+                try:
+                    session_id = session_state["session_id"] if "session_id" in session_state else None
+                except (TypeError, KeyError):
+                    session_id = None
+                    
+            logger.info(f"[SESSION] Current session state: {type(session_state)}")
+            try:
+                logger.info(f"[SESSION] Current session state keys: {list(session_state.keys() if hasattr(session_state, 'keys') else [])}")
+            except:
+                logger.info(f"[SESSION] Session state doesn't support keys()")
             logger.info(f"[SESSION] Current session_id from state: {session_id}")
             
             # Flag để kiểm tra nếu session được phục hồi
@@ -737,26 +738,48 @@ def create_enhanced_chatbot():
             # Tạo user ID từ username
             user_id = self.generate_user_id(username)
             
-            # Cập nhật session_state
-            session_state["session_id"] = session_id
-            session_state["user_id"] = user_id
+            # Cập nhật session_state - Sửa lỗi với State object
+            # session_state["session_id"] = session_id
+            # session_state["user_id"] = user_id
+            
+            # Thay vì gán trực tiếp, sử dụng phương thức cập nhật an toàn
+            session_state = self._update_session_state(session_state, {
+                "session_id": session_id,
+                "user_id": user_id
+            })
             
             # FIX: Luôn load lịch sử nếu là session được phục hồi, không chỉ khi history trống
             if is_restored_session:
                 logger.info(f"Loading history from restored session: {session_id}")
                 old_history = self.load_previous_session(username, session_id)
                 
-                # FIX: Đồng thời khôi phục conversation_history từ file nếu có
-                if "conversation_history" not in session_state or not session_state["conversation_history"]:
+                # Sửa lại cách truy cập session_state để kiểm tra conversation_history
+                has_conversation_history = False
+                if isinstance(session_state, dict):
+                    has_conversation_history = "conversation_history" in session_state and session_state["conversation_history"]
+                else:
+                    try:
+                        has_conversation_history = "conversation_history" in session_state and session_state["conversation_history"]
+                    except (TypeError, KeyError):
+                        has_conversation_history = False
+                
+                if not has_conversation_history:
                     conversation_history = self._load_conversation_history(session_id)
                     if conversation_history:
                         logger.info(f"[FIX] Manually loaded {len(conversation_history)} entries to conversation_history")
-                        session_state["conversation_history"] = conversation_history
+                        # session_state["conversation_history"] = conversation_history  # Lỗi với State object
+                        session_state = self._update_session_state(session_state, {
+                            "conversation_history": conversation_history
+                        })
                     else:
                         # Khởi tạo mới nếu không tìm thấy
                         logger.info(f"[FIX] Initializing new conversation_history for session {session_id}")
-                        session_state["conversation_history"] = []
+                        # session_state["conversation_history"] = []  # Lỗi với State object
+                        session_state = self._update_session_state(session_state, {
+                            "conversation_history": []
+                        })
                 
+                # Khôi phục phần xử lý old_history
                 if old_history:
                     # FIX: Chỉ thay thế history nếu nó trống hoặc không có tin nhắn nào
                     if not history or len(history) == 0:
@@ -791,16 +814,31 @@ def create_enhanced_chatbot():
                 session_state["session_id"] = session_id
                 
                 # FIX: Đảm bảo conversation_history được khởi tạo đúng cách
-                if "conversation_history" not in session_state or not session_state["conversation_history"]:
+                has_conversation_history = False
+                if isinstance(session_state, dict):
+                    has_conversation_history = "conversation_history" in session_state and session_state["conversation_history"]
+                else:
+                    try:
+                        has_conversation_history = "conversation_history" in session_state and session_state["conversation_history"]
+                    except (TypeError, KeyError):
+                        has_conversation_history = False
+                    
+                if not has_conversation_history:
                     # Thử load lại từ file nếu chưa có
                     conversation_history = self._load_conversation_history(session_id)
                     if conversation_history:
                         logger.info(f"[FIX] Manually loaded {len(conversation_history)} entries to conversation_history")
-                        session_state["conversation_history"] = conversation_history
+                        # session_state["conversation_history"] = conversation_history  # Lỗi với State object
+                        session_state = self._update_session_state(session_state, {
+                            "conversation_history": conversation_history
+                        })
                     else:
                         # Khởi tạo mới nếu không tìm thấy
                         logger.info(f"[FIX] Initializing new conversation_history for session {session_id}")
-                        session_state["conversation_history"] = []
+                        # session_state["conversation_history"] = []  # Lỗi với State object
+                        session_state = self._update_session_state(session_state, {
+                            "conversation_history": []
+                        })
                 
                 # Determine processing mode
                 has_image = image is not None
@@ -824,7 +862,7 @@ def create_enhanced_chatbot():
                         medical_context={
                             "user_context": context
                         } if context else None,
-                        conversation_history=session_state.get("conversation_history", []),  # CRITICAL: Pass conversation history
+                        conversation_history=self._get_session_value(session_state, "conversation_history", []),  # CRITICAL: Pass conversation history
                         session_id=session_id  # CRITICAL: Pass session_id explicitly
                     )
                     
@@ -854,10 +892,16 @@ def create_enhanced_chatbot():
                                     viz_path = self._save_visualization(viz_base64, viz_filename)
                                     
                                     # FIXED: Lưu cả path và base64 data
-                                    session_state["last_visualization"] = viz_path
-                                    session_state["last_visualization_base64"] = viz_base64
-                                    session_state["has_visualization"] = True
-                                    session_state["pending_viz"] = True  # Flag để hiển thị sau final_answer
+                                    # session_state["last_visualization"] = viz_path
+                                    # session_state["last_visualization_base64"] = viz_base64
+                                    # session_state["has_visualization"] = True
+                                    # session_state["pending_viz"] = True  # Flag để hiển thị sau final_answer
+                                    session_state = self._update_session_state(session_state, {
+                                        "last_visualization": viz_path,
+                                        "last_visualization_base64": viz_base64,
+                                        "has_visualization": True,
+                                        "pending_viz": True
+                                    })
                             else:
                                 # No polyps detected case
                                 # Display entry 0 response first for no polyp case but REMOVE Medical AI Assessment prefix if exists
@@ -899,7 +943,9 @@ def create_enhanced_chatbot():
                                 
                                 # Add the visualization image
                                 response_parts.append(f'<img src="{img_data_url}" alt="Polyp Detection Results" style="max-width: 100%; height: auto; border-radius: 8px; margin: 10px 0;">')
-                                session_state["pending_viz"] = False  # Reset flag
+                                session_state = self._update_session_state(session_state, {
+                                    "pending_viz": False
+                                })
                         
                         # CRITICAL FIX: Update conversation history properly
                         if "conversation_history" in result:
@@ -909,12 +955,15 @@ def create_enhanced_chatbot():
                             if updated_history and len(updated_history) > 0:
                                 last_entry = updated_history[-1]
                                 
-                                # CRITICAL FIX: If query is empty or wrong, fix it
+                                # Fix query in last entry if needed
                                 if not last_entry.get("query") or last_entry.get("query") != original_message:
                                     logger.info(f"[FIX] Correcting query in history: '{last_entry.get('query', 'EMPTY')}' -> '{original_message}'")
                                     last_entry["query"] = original_message
                             
-                            session_state["conversation_history"] = updated_history
+                            # session_state["conversation_history"] = updated_history  # Lỗi với State object
+                            session_state = self._update_session_state(session_state, {
+                                "conversation_history": updated_history
+                            })
                             logger.info(f"[FIXED] Updated session with conversation_history: {len(updated_history)} entries")
                             
                             # FIX: Lưu conversation_history vào file để phục hồi sau này
@@ -1011,7 +1060,7 @@ def create_enhanced_chatbot():
                             "user_context": context,
                             "is_text_only": True
                         } if context else {"is_text_only": True},
-                        conversation_history=session_state.get("conversation_history", []),  # CRITICAL: Pass conversation history
+                        conversation_history=self._get_session_value(session_state, "conversation_history", []),  # CRITICAL: Pass conversation history
                         session_id=session_id  # CRITICAL: Pass session_id explicitly
                     )
                     
@@ -1037,8 +1086,10 @@ def create_enhanced_chatbot():
                             streaming_text = ""
                             
                             if context:
-                                streaming_text += "💭 **Based on previous information:**\n"
-                                streaming_text += (context[:200] + "..." if len(context) > 200 else context) + "\n\n"
+                                # Loại bỏ dòng "Based on previous information:"
+                                # streaming_text += "💭 **Based on previous information:**\n"
+                                # streaming_text += (context[:200] + "..." if len(context) > 200 else context) + "\n\n"
+                                pass  # Bỏ qua phần hiển thị thông tin ngữ cảnh trước đó
                             
                             streaming_text += "💬 **Medical AI Response:**\n"
                             
@@ -1074,8 +1125,8 @@ def create_enhanced_chatbot():
                                     yield "", history, session_state
                                     time.sleep(0.05)  # Điều chỉnh tốc độ streaming
                             
-                            # Thêm footer
-                            current_text += "\n\n🔬 **Processed by:** LLaVA-Med (Medical LLM)"
+                            # Loại bỏ footer "Processed by: LLaVA-Med (Medical LLM)"
+                            # current_text += "\n\n🔬 **Processed by:** LLaVA-Med (Medical LLM)"
                             history[-1][1] = current_text
                             yield "", history, session_state
                             
@@ -1090,7 +1141,10 @@ def create_enhanced_chatbot():
                                         logger.info(f"[FIX] Correcting text-only query in history: '{last_entry.get('query', 'EMPTY')}' -> '{original_message}'")
                                         last_entry["query"] = original_message
                                 
-                                session_state["conversation_history"] = updated_history
+                                # session_state["conversation_history"] = updated_history  # Lỗi với State object
+                                session_state = self._update_session_state(session_state, {
+                                    "conversation_history": updated_history
+                                })
                                 logger.info(f"[FIXED] Updated session with text conversation_history: {len(updated_history)} entries")
                                 
                                 # FIX: Lưu conversation_history vào file cho cả text-only workflow
@@ -1128,9 +1182,12 @@ def create_enhanced_chatbot():
                 self.memory.add_to_short_term(session_id, interaction)
                 
                 # Ensure conversation history exists in session_state
-                if "conversation_history" not in session_state:
+                if not self._get_session_value(session_state, "conversation_history"):
                     logger.warning(f"conversation_history missing in session_state, initializing new one")
-                    session_state["conversation_history"] = []
+                    # session_state["conversation_history"] = []  # Lỗi với State object
+                    session_state = self._update_session_state(session_state, {
+                        "conversation_history": []
+                    })
                 
                 # If conversation_history was not updated by the workflow (common with image queries)
                 # We manually add the current interaction to it
@@ -1161,7 +1218,10 @@ def create_enhanced_chatbot():
                         }
                         # Add entry to conversation history
                         curr_history.append(history_entry)
-                        session_state["conversation_history"] = curr_history
+                        # session_state["conversation_history"] = curr_history  # Lỗi với State object
+                        session_state = self._update_session_state(session_state, {
+                            "conversation_history": curr_history
+                        })
                         # logger.info(f"Conversation history updated manually, now has {len(curr_history)} entries")
                 
                 # Debug - log final state of conversation history
@@ -1476,6 +1536,44 @@ def create_enhanced_chatbot():
             except Exception as e:
                 logger.error(f"Error saving conversation history: {str(e)}")
                 return False
+
+        # Thêm helper method để truy cập an toàn vào session_state
+        def _get_session_value(self, session_state, key, default=None):
+            """Truy cập an toàn giá trị từ session_state."""
+            if isinstance(session_state, dict):
+                return session_state.get(key, default)
+            else:
+                try:
+                    return session_state[key] if key in session_state else default
+                except (TypeError, KeyError, AttributeError):
+                    return default
+
+        # Thêm helper method để cập nhật an toàn session_state
+        def _update_session_state(self, session_state, updates):
+            """Cập nhật an toàn session_state."""
+            if isinstance(session_state, dict):
+                # Nếu là dict bình thường, cập nhật trực tiếp
+                session_state.update(updates)
+                return session_state
+            else:
+                # Nếu là đối tượng State của Gradio hoặc loại khác
+                try:
+                    # Tạo một dict mới từ đối tượng state hiện tại
+                    new_state = {}
+                    try:
+                        # Cố gắng lưu các giá trị hiện có vào dict mới
+                        for key in session_state:
+                            new_state[key] = session_state[key]
+                    except:
+                        logger.warning("Unable to iterate through session_state, creating new state")
+                    
+                    # Cập nhật từ dict mới
+                    new_state.update(updates)
+                    return new_state
+                except Exception as e:
+                    # Fallback nếu có lỗi
+                    logger.error(f"Error updating session state: {e}")
+                    return updates  # Trả về updates như một state mới
 
     # Create and return enhanced chatbot
     return EnhancedMedicalAIChatbot(config)

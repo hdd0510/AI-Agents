@@ -17,7 +17,7 @@ from medical_ai_agents.tools.base_tools import BaseTool
 class YOLODetectionTool(BaseTool):
     """Tool thực hiện detection YOLO."""
     
-    def __init__(self, model_path: str, device: str = "cuda", confidence_threshold: float = 0.25, **kwargs):
+    def __init__(self, model_path: str, device: str = "cuda", confidence_threshold: float = 0.25, iou_threshold: float = 0.45, **kwargs):
         """Initialize the YOLO detection tool."""
         # Initialize with name and description first
         super().__init__(
@@ -27,6 +27,7 @@ class YOLODetectionTool(BaseTool):
         self.model_path = model_path
         self.device = device
         self.confidence_threshold = confidence_threshold
+        self.iou_threshold = iou_threshold
         self.model = None
         self._initialize()
     
@@ -42,8 +43,8 @@ class YOLODetectionTool(BaseTool):
             self.logger.error(f"Failed to load YOLO model: {str(e)}")
             return False
     
-    def _run(self, image_path: str, conf_thresh: Optional[float] = None) -> Dict[str, Any]:
-        """Run YOLO detection on image."""
+    def _run(self, image_path: str, conf_thresh: Optional[float] = None, iou_thresh: Optional[float] = None, **kwargs) -> Dict[str, Any]:
+        """Run YOLO detection on image with dynamic parameters."""
         if self.model is None:
             return {"success": False, "error": "YOLO model not initialized"}
         
@@ -53,16 +54,23 @@ class YOLODetectionTool(BaseTool):
         except Exception as e:
             return {"success": False, "error": f"Failed to load image: {str(e)}"}
         
-        # Use provided threshold or default
-        thresh = conf_thresh if conf_thresh is not None else self.confidence_threshold
+        # Use provided thresholds or defaults
+        conf = conf_thresh if conf_thresh is not None else self.confidence_threshold
+        iou = iou_thresh if iou_thresh is not None else self.iou_threshold
+        
+        # Optional parameters
+        max_det = kwargs.get('max_det', 100)
+        verbose = kwargs.get('verbose', False)
+        
+        self.logger.info(f"Running detection with conf={conf}, iou={iou}")
         
         # Run detection
         results = self.model.predict(
             source=image,
-            conf=thresh,
-            iou=0.45,
-            max_det=100,
-            verbose=False
+            conf=conf,
+            iou=iou,
+            max_det=max_det,
+            verbose=verbose
         )
         
         # Process results
@@ -108,7 +116,11 @@ class YOLODetectionTool(BaseTool):
         return {
             "success": True,
             "objects": detections,
-            "count": len(detections)
+            "count": len(detections),
+            "parameters": {
+                "conf_thresh": conf,
+                "iou_thresh": iou
+            }
         }
     
     def get_parameters_schema(self) -> Dict[str, Any]:
@@ -121,6 +133,11 @@ class YOLODetectionTool(BaseTool):
             "conf_thresh": {
                 "type": "number",
                 "description": "Optional confidence threshold (0-1)",
+                "required": False
+            },
+            "iou_thresh": {
+                "type": "number",
+                "description": "Optional IoU threshold (0-1)",
                 "required": False
             }
         }

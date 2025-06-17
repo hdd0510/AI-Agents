@@ -8,12 +8,65 @@ import json
 import logging
 from typing import Dict, Any, List, Callable
 import time
+import os
 
 from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain.schema import StrOutputParser, HumanMessage
 
 from medical_ai_agents.config import SystemState, TaskType
+
+# Document embedding node
+def document_embedding(state: SystemState, rag_agent) -> SystemState:
+    """Process and embed documents into vector database."""
+    logger = logging.getLogger("graph.nodes.document_embedding")
+    
+    # Check for uploaded documents
+    uploaded_docs = state.get("uploaded_documents", [])
+    
+    if not uploaded_docs:
+        logger.info("No documents to embed, skipping embedding step")
+        return state
+    
+    # Verify document existence
+    valid_docs = []
+    for doc in uploaded_docs:
+        if os.path.exists(doc):
+            valid_docs.append(doc)
+        else:
+            logger.warning(f"Document not found: {doc}")
+    
+    if not valid_docs:
+        logger.warning("No valid documents found for embedding")
+        return state
+    
+    # Process and embed documents
+    logger.info(f"Processing {len(valid_docs)} documents for embedding")
+    try:
+        result = rag_agent.add_documents(valid_docs)
+        
+        if result.get("success", False):
+            logger.info(f"Successfully embedded {len(result.get('documents', []))} documents")
+            # Store embedding result in state
+            state["embedding_result"] = {
+                "success": True,
+                "documents_processed": result.get("documents", []),
+                "message": result.get("message", "Documents processed successfully")
+            }
+        else:
+            logger.error(f"Failed to embed documents: {result.get('error', 'Unknown error')}")
+            state["embedding_result"] = {
+                "success": False,
+                "error": result.get("error", "Failed to embed documents")
+            }
+    except Exception as e:
+        logger.error(f"Exception during document embedding: {str(e)}")
+        state["embedding_result"] = {
+            "success": False,
+            "error": f"Exception during document embedding: {str(e)}"
+        }
+    
+    return state
 
 # Node wrapper to automatically mark tasks as completed
 def task_completion_wrapper(agent_node: Callable, task_name: str) -> Callable:
@@ -474,141 +527,122 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
     
     # Check if it's a general (non-medical) query
     is_general_query = "general_query" in state.get("required_tasks", [])
-    # is_text_only = state.get("is_text_only", False)
-
-    # For general queries, use a simpler prompt without medical context
-    if is_general_query:
-        logger.info("Processing general (non-medical) query")
-        
-        # Include conversation history in prompt
-        conversation_context = ""
-        if conversation_history:
-            # Filter out system messages, meta-queries and pending messages for context
-            filtered_entries = [
-                entry for entry in conversation_history 
-                if not entry.get("is_system", False) and 
-                not entry.get("is_meta", False) and 
-                not entry.get("is_pending", False)
-            ]
-            
-            # Get the last 10 relevant interactions thay vì 3
-            recent_conversations = filtered_entries[-10:] if filtered_entries else []
-            
-            if recent_conversations:
-                conversation_context = "Previous conversation:\n"
-                for i, conv in enumerate(recent_conversations):
-                    conversation_context += f"User: {conv.get('query', '')}\n"
-                    # Limit system response to prevent overly long prompts
-                    system_response = conv.get('response', '')
-                    if len(system_response) > 150:
-                        system_response = system_response[:147] + "..."
-                    conversation_context += f"System: {system_response}\n\n"
-                
-                # Add a separator to make the context more visible to the model
-                conversation_context += "--------------------\n"
-            
-            logger.info(f"Built general query context with {len(recent_conversations)} recent user-system exchanges")
-        
-        general_prompt = PromptTemplate.from_template(
-            """You are a Medical AI Assistant providing advice and information. The user asked a question that's not specifically medical in nature, but you should still maintain your medical identity.
-
-{conversation_context}
-
-Current Question: "{query}"
-
-Respond to this question directly and conversationally. Even though this isn't a medical question, make it clear you are a Medical AI Assistant designed primarily for healthcare-related questions. Use a professional tone but avoid unnecessary medical terminology when responding to general questions.
-"""
-        )
-        
-        try:
-            chain = general_prompt | llm | StrOutputParser()
-            general_response = chain.invoke({
-                "query": current_query,
-                "conversation_context": conversation_context
-            })
-            
-            final_result = {
-                "task_type": state.get("task_type", "text_only"),
-                "success": True,
-                "session_id": state.get("session_id", ""),
-                "query": current_query,
-                "timestamp": time.time(),
-                "response": general_response,
-                "processing_time": processing_time,
-                "final_answer": general_response,
-                "is_general_query": True
-            }
-            
-            # Add the current interaction to conversation history
-            conversation_history.append({
-                "query": current_query,
-                "response": general_response,
-                "timestamp": time.time()
-            })
-            
-            logger.info(f"Added new general query entry to conversation history. Now has {len(conversation_history)} entries.")
-            
-            return {
-                **state, 
-                "final_result": final_result,
-                "conversation_history": conversation_history
-            }
-            
-        except Exception as e:
-            logger.error(f"General query processing failed: {str(e)}")
-            fallback_response = "I couldn't process your question. Could you please rephrase it?"
-            
-            final_result = {
-                "task_type": state.get("task_type", "text_only"),
-                "success": False,
-                "error": str(e),
-                "session_id": state.get("session_id", ""),
-                "query": current_query,
-                "timestamp": time.time(),
-                "response": fallback_response,
-                "processing_time": processing_time,
-                "final_answer": fallback_response,
-                "is_general_query": True
-            }
-            
-            # Add the current interaction to conversation history even if it failed
-            conversation_history.append({
-                "query": current_query,
-                "response": fallback_response,
-                "timestamp": time.time(),
-                "error": True
-            })
-            
-            return {
-                **state, 
-                "final_result": final_result,
-                "conversation_history": conversation_history
-            }
     
-    # Prepare agent results
+    # Process all agent results
     agent_results = {}
     
-    # Add detector results
+    # Process detector result
     if "detector_result" in state:
-        agent_results["detector"] = state["detector_result"]
+        detector = state["detector_result"]
+        if detector.get("success", False):
+            agent_results["detection"] = {
+                "count": detector.get("count", 0),
+                "boxes": detector.get("boxes", []),
+                "scores": detector.get("scores", []),
+                "classes": detector.get("classes", []),
+                "image_path": detector.get("image_path", "")
+            }
     
-    # Add classifier results
+    # Process modality result
     if "modality_result" in state:
-        agent_results["modality"] = state["modality_result"]
+        modality = state["modality_result"]
+        if modality.get("success", False):
+            agent_results["modality"] = {
+                "class_name": modality.get("class_name", "Unknown"),
+                "confidence": modality.get("confidence", 0.0),
+                "all_classes": modality.get("all_classes", []),
+                "all_scores": modality.get("all_scores", [])
+            }
     
+    # Process region result
     if "region_result" in state:
-        agent_results["region"] = state["region_result"]
+        region = state["region_result"]
+        if region.get("success", False):
+            agent_results["region"] = {
+                "class_name": region.get("class_name", "Unknown"),
+                "confidence": region.get("confidence", 0.0),
+                "all_classes": region.get("all_classes", []),
+                "all_scores": region.get("all_scores", [])
+            }
     
-    # Add VQA results
+    # Process VQA result
     if "vqa_result" in state:
-        agent_results["vqa"] = state["vqa_result"]
+        vqa = state["vqa_result"]
+        if vqa.get("success", False):
+            agent_results["vqa"] = {
+                "answer": vqa.get("answer", ""),
+                "confidence": vqa.get("confidence", 0.0),
+                "reasoning": vqa.get("reasoning", ""),
+                "sources": vqa.get("sources", [])
+            }
     
-    # Add RAG results
+    # Process RAG result
     if "rag_result" in state:
-        agent_results["rag"] = state["rag_result"]
+        rag = state["rag_result"]
+        if rag.get("success", False):
+            agent_results["rag"] = {
+                "answer": rag.get("answer", ""),
+                "sources": rag.get("sources", []),
+                "chunks_retrieved": rag.get("chunks_retrieved", 0),
+                "documents_processed": rag.get("documents_processed", []),
+                "query_complexity": rag.get("query_complexity", "simple")
+            }
     
-    # Build LLM prompt based on available results
-    has_detection = "detector" in agent_results
+    # Retrieve additional vector search results for context enrichment
+    vector_context = ""
+    try:
+        # Check if we have a RAG agent and query
+        if current_query and "rag_agent" in state and hasattr(state["rag_agent"], "search_tool"):
+            logger.info("Retrieving additional vector context for synthesis")
+            search_result = state["rag_agent"].search_tool._run(
+                query=current_query,
+                top_k=3,
+                threshold=0.5
+            )
+            
+            if search_result.get("success", False) and search_result.get("results"):
+                results = search_result["results"]
+                vector_context = "\n\nAdditional context from documents:\n"
+                for i, result in enumerate(results):
+                    source = result.get("source", "Unknown source")
+                    content = result.get("content", "").strip()
+                    score = result.get("score", 0.0)
+                    vector_context += f"[Document {i+1}] From {source} (relevance: {score:.2f}):\n{content}\n\n"
+                
+                logger.info(f"Retrieved {len(results)} additional context chunks")
+        
+        # If we don't have a direct RAG agent reference but have embedded documents
+        elif current_query and "embedding_result" in state and state["embedding_result"].get("success", False):
+            # Try to find the vector search tool in the workflow
+            from medical_ai_agents.tools.rag.vector_search import VectorSearchTool
+            
+            # Create a temporary search tool if needed
+            storage_path = state.get("rag_storage_path", "./rag_storage")
+            search_tool = VectorSearchTool(storage_path=storage_path)
+            
+            if search_tool.initialize_index():
+                search_result = search_tool._run(
+                    query=current_query,
+                    top_k=3,
+                    threshold=0.5
+                )
+                
+                if search_result.get("success", False) and search_result.get("results"):
+                    results = search_result["results"]
+                    vector_context = "\n\nAdditional context from documents:\n"
+                    for i, result in enumerate(results):
+                        source = result.get("source", "Unknown source")
+                        content = result.get("content", "").strip()
+                        score = result.get("score", 0.0)
+                        vector_context += f"[Document {i+1}] From {source} (relevance: {score:.2f}):\n{content}\n\n"
+                    
+                    logger.info(f"Retrieved {len(results)} additional context chunks")
+    except Exception as e:
+        logger.error(f"Error retrieving additional vector context: {str(e)}")
+        vector_context = ""
+    
+    # Build synthesis prompt
+    has_detection = "detection" in agent_results
     has_modality = "modality" in agent_results
     has_region = "region" in agent_results
     has_vqa = "vqa" in agent_results 
@@ -635,151 +669,161 @@ Respond to this question directly and conversationally. Even though this isn't a
     
     # Include conversation history in the medical prompt
     conversation_context = ""
-    if conversation_history:
-        # Filter out system initialization messages and meta-queries for context
-        relevant_entries = [
-            entry for entry in conversation_history 
-            if not entry.get("is_system", False) and not entry.get("is_meta", False) and not entry.get("is_pending", False)
-        ]
-        
-        # Get the last 10 interactions at most thay vì 3
-        recent_conversations = relevant_entries[-10:] if relevant_entries else []
-        
-        if recent_conversations:
-            conversation_context = "Previous conversation context:\n"
-            for i, conv in enumerate(recent_conversations):
-                conversation_context += f"User: {conv.get('query', '')}\n"
-                # Limit system response to prevent overly long prompts
-                system_response = conv.get('response', '')
-                if len(system_response) > 150:  # Shorter limit for synthesizer to save space
-                    system_response = system_response[:147] + "..."
-                conversation_context += f"System: {system_response}\n\n"
-            
-            # Add a separator to make the context more visible to the model
-            conversation_context += "--------------------\n"
-        
-        logger.info(f"Built conversation context with {len(recent_conversations)} recent user-system exchanges")
     
-    # Set up different prompts based on the scenario
-    if prioritize_rag:
-        prompt_template = """You are a Medical AI Assistant specializing in healthcare and medical consultation. Your purpose is to provide accurate medical information based on document analysis.
+    if len(conversation_history) > 0:
+        # Get last 2 turns of conversation for context
+        recent_history = conversation_history[-2:] if len(conversation_history) >= 2 else conversation_history
         
-{conversation_context}
+        conversation_context = "\nConversation history:\n"
+        for i, entry in enumerate(recent_history):
+            q = entry.get("query", "")
+            r = entry.get("response", "")
+            if q and r:
+                conversation_context += f"User: {q}\nAssistant: {r}\n\n"
+    
+    # Build the prompt for synthesis
+    if is_general_query:
+        # Simple prompt for general (non-medical) queries
+        prompt_template = """You are a helpful assistant answering a general question.
 
-The user asked: "{query}"
+User query: "{query}"
 
-The document analysis yielded the following information:
+Please provide a direct and helpful response.{conversation_context}"""
+        
+        prompt_args = {
+            "query": current_query,
+            "conversation_context": conversation_context
+        }
+    
+    elif prioritize_rag:
+        # RAG-focused prompt when document search is the primary task
+        prompt_template = """You are a medical assistant providing information based primarily on document search results.
+
+User query: "{query}"
+
+Document search results:
 {rag_answer}
 
-Sources cited:
+Sources:
 {rag_sources}
 
-Your task:
-1. Consider the previous conversation context if relevant
-2. Respond to the user's query directly using the document analysis results
-3. Maintain all citations and references to documents
-4. Format your response in a clear, professional manner suited for medical consultation
-5. Always identify yourself as a Medical AI Assistant
-6. Respond in English, maintaining medical accuracy"""
+{vector_context}
+
+Please synthesize a comprehensive answer that:
+1. Directly addresses the user's query
+2. Cites specific sources when referencing information
+3. Maintains medical accuracy and precision
+4. Uses proper medical terminology
+
+Your response should be well-structured and focused on the document-based information.{conversation_context}"""
+        
+        # Format RAG sources for the prompt
+        rag_sources_text = ""
+        if has_rag and agent_results["rag"].get("sources"):
+            for i, source in enumerate(agent_results["rag"]["sources"]):
+                doc = source.get("document", "Unknown")
+                page = source.get("page", 0)
+                score = source.get("score", 0.0)
+                rag_sources_text += f"[{i+1}] {doc} (page {page}, relevance: {score:.2f})\n"
+        
+        prompt_args = {
+            "query": current_query,
+            "rag_answer": agent_results["rag"]["answer"] if has_rag else "",
+            "rag_sources": rag_sources_text,
+            "vector_context": vector_context,
+            "conversation_context": conversation_context
+        }
+    
     else:
-        prompt_template = """You are a Medical AI Assistant specializing in healthcare and medical consultation. Your purpose is to provide comprehensive medical analysis.
+        # Comprehensive medical prompt for multi-task synthesis
+        prompt_template = """You are a medical assistant synthesizing results from multiple analysis tasks: {tasks}.
 
-{conversation_context}
+User query: "{query}"
 
-The user asked: "{query}"
+Analysis results:
+{analysis_results}
 
-I have analyzed the available medical information:
-{combined_results}
+{vector_context}
 
-IMPORTANT INSTRUCTIONS:
-1. Respond as a UNIFIED MEDICAL ASSISTANT, not as a collection of tools or agents
-2. DO NOT mention separate tools, agents or model names (like LLaVA, modality detector, etc.)
-3. DO NOT use phrases like "Based on the analysis" or "According to the medical AI system"
-4. DO NOT list or itemize different analyses - integrate everything into a cohesive, natural response
-5. Speak directly as a knowledgeable medical assistant (use "I" not "the system")
-6. If the analysis contains uncertainties, incorporate them naturally without mentioning confidence scores
-7. Maintain a professional, confident, and conversational medical tone
+Please synthesize a comprehensive medical response that:
+1. Directly addresses the user's query
+2. Integrates all relevant findings from the analyses
+3. Provides clear medical explanations
+4. Maintains professional medical tone and terminology
+5. Cites sources when referencing document information
 
-Your response must read like it comes from a single, unified medical assistant with deep expertise in gastroenterology and medical image analysis.
-"""
-    
-    # Format the prompt arguments
-    prompt_args = {
-        "query": current_query,
-        "tasks": tasks_str,
-        "conversation_context": conversation_context
-    }
-    
-    # Add RAG-specific information if prioritizing RAG
-    if prioritize_rag and has_rag:
-        rag_result = agent_results["rag"]
-        rag_answer = rag_result.get("answer", "")
+Your response should be well-structured and focused on the medical significance of the findings.{conversation_context}"""
         
-        # Format sources
-        sources = rag_result.get("sources", [])
-        sources_text = ""
-        for i, source in enumerate(sources):
-            sources_text += f"{i+1}. Document: {source.get('document', 'Unknown')}, Page: {source.get('page', '?')}\n"
+        # Build detailed analysis results text
+        analysis_text = ""
         
-        prompt_args["rag_answer"] = rag_answer
-        prompt_args["rag_sources"] = sources_text
-    
-    # Default to combined results
-    combined_results = ""
-    
-    # Add detailed results for different agents
-    if has_detection:
-        detector = agent_results["detector"]
-        if detector.get("success", False):
-            combined_results += f"Polyp Detection: {detector.get('count', 0)} polyp(s) found\n"
-            if detector.get("boxes", []):
-                combined_results += f"Locations: {len(detector.get('boxes', []))} location(s) identified\n"
-    
-    if has_modality:
-        modality = agent_results["modality"]
-        if modality.get("success", False):
-            confidence = modality.get("confidence", 0.0)
+        # Add detection results
+        if has_detection:
+            detection = agent_results["detection"]
+            count = detection.get("count", 0)
+            analysis_text += f"POLYP DETECTION: {count} polyp(s) detected\n"
+            if count > 0:
+                analysis_text += "Findings:\n"
+                for i in range(min(count, len(detection.get("boxes", [])))):
+                    score = detection["scores"][i] if i < len(detection.get("scores", [])) else 0
+                    analysis_text += f"- Polyp {i+1}: confidence {score:.2f}\n"
+                analysis_text += "\n"
+        
+        # Add modality results
+        if has_modality:
+            modality = agent_results["modality"]
             class_name = modality.get("class_name", "Unknown")
+            confidence = modality.get("confidence", 0.0)
+            analysis_text += f"MODALITY CLASSIFICATION: {class_name} (confidence: {confidence:.2f})\n"
             
-            # Handle low confidence results
-            if modality.get("is_low_confidence", False):
-                combined_results += f"Imaging Modality: {class_name} (LOW CONFIDENCE: {confidence:.1%})\n"
-                combined_results += f"LLM Analysis of Modality: {modality.get('analysis', '')[:300]}...\n"
-            else:
-                combined_results += f"Imaging Modality: {class_name} ({confidence:.1%} confidence)\n"
-            
-    if has_region:
-        region = agent_results["region"]
-        if region.get("success", False):
-            confidence = region.get("confidence", 0.0)
+            # Add explanation of modality
+            if class_name == "WLI":
+                analysis_text += "White Light Imaging - standard endoscopic visualization\n"
+            elif class_name == "BLI":
+                analysis_text += "Blue Light Imaging - enhanced visualization of surface patterns and vessels\n"
+            elif class_name == "FICE":
+                analysis_text += "Flexible spectral Imaging Color Enhancement - digital chromoendoscopy\n"
+            elif class_name == "LCI":
+                analysis_text += "Linked Color Imaging - enhanced visualization of mucosal changes\n"
+            analysis_text += "\n"
+        
+        # Add region results
+        if has_region:
+            region = agent_results["region"]
             class_name = region.get("class_name", "Unknown")
-            
-            # Handle low confidence results
-            if region.get("is_low_confidence", False):
-                combined_results += f"Anatomical Region: {class_name} (LOW CONFIDENCE: {confidence:.1%})\n"
-                combined_results += f"LLM Analysis of Region: {region.get('analysis', '')[:300]}...\n"
-            else:
-                combined_results += f"Anatomical Region: {class_name} ({confidence:.1%} confidence)\n"
-    if has_rag:
-        rag = agent_results["rag"]
-        if rag.get("success", False):
-            combined_results += f"Document Analysis: {len(rag.get('documents_processed', []))} document(s) processed\n"
-            combined_results += f"Found {rag.get('chunks_retrieved', 0)} relevant passages\n"
-            combined_results += f"Document Answer: {rag.get('answer', 'No clear answer found')}\n"
+            confidence = region.get("confidence", 0.0)
+            analysis_text += f"ANATOMICAL REGION: {class_name} (confidence: {confidence:.2f})\n\n"
+        
+        # Add VQA results
+        if has_vqa:
+            vqa = agent_results["vqa"]
+            analysis_text += f"MEDICAL ANALYSIS:\n{vqa.get('answer', '')}\n"
+            if vqa.get("reasoning"):
+                analysis_text += f"Reasoning: {vqa.get('reasoning')}\n"
+            analysis_text += "\n"
+        
+        # Add RAG results
+        if has_rag:
+            rag = agent_results["rag"]
+            analysis_text += f"DOCUMENT ANALYSIS:\n{rag.get('answer', '')}\n\n"
+            if rag.get("sources"):
+                analysis_text += "Sources:\n"
+                for i, source in enumerate(rag["sources"][:3]):  # Show top 3 sources
+                    doc = source.get("document", "Unknown")
+                    page = source.get("page", 0)
+                    analysis_text += f"- {doc} (page {page})\n"
+                analysis_text += "\n"
+        
+        prompt_args = {
+            "query": current_query,
+            "tasks": tasks_str,
+            "analysis_results": analysis_text,
+            "vector_context": vector_context,
+            "conversation_context": conversation_context
+        }
     
-    if has_vqa:
-        vqa = agent_results["vqa"]
-        if vqa.get("success", False):
-            combined_results += f"Medical Analysis: {vqa.get('answer', 'No clear answer provided')}\n"
-    
-    prompt_args["combined_results"] = combined_results
-    
-    # Build the prompt with the appropriate template
-    prompt = PromptTemplate.from_template(
-        prompt_template 
-    )
-    
-    # Create the chain
+    # Create and invoke chain
+    prompt = PromptTemplate.from_template(prompt_template)
     chain = prompt | llm | StrOutputParser()
     
     # Invoke the chain
@@ -821,38 +865,12 @@ Your response must read like it comes from a single, unified medical assistant w
         }
         
     except Exception as e:
-        logger.error(f"Result synthesis failed: {str(e)}")
-        
-        # Fallback to direct response
-        if has_vqa:
-            fallback_response = agent_results["vqa"].get("answer", "")
-        elif has_rag:
-            fallback_response = agent_results["rag"].get("answer", "")
-        else:
-            fallback_response = "I couldn't synthesize a comprehensive answer due to an error."
-        
-        final_result = {
-            "task_type": state.get("task_type", "comprehensive"),
-            "success": False,
-            "error": str(e),
-            "session_id": state.get("session_id", ""),
-            "query": current_query,
-            "timestamp": time.time(),
-            "response": fallback_response,
-            "processing_time": processing_time,
-            "final_answer": fallback_response
-        }
-        
-        # Add the current interaction to conversation history even if it failed
-        conversation_history.append({
-            "query": current_query,
-            "response": fallback_response,
-            "timestamp": time.time(),
-            "error": True
-        })
-        
+        logger.error(f"Synthesis failed: {str(e)}")
         return {
-            **state, 
-            "final_result": final_result,
-            "conversation_history": conversation_history
+            **state,
+            "final_result": {
+                "success": False,
+                "error": f"Failed to synthesize response: {str(e)}",
+                "query": current_query
+            }
         }

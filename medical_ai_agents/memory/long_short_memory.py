@@ -195,8 +195,6 @@ class LongShortTermMemory:
             recent_interactions = session_data.get("interactions", [])[-5:]  # Last 5 interactions
             
             if recent_interactions:
-                context_parts.append("Based on our recent conversation:")
-                
                 for interaction in recent_interactions:
                     query = interaction.get("query", "")
                     response = interaction.get("response", "")
@@ -784,6 +782,16 @@ class MedicalAIChatbot:
                 margin-bottom: 10px;
                 gap: 5px;
             }
+            /* Tùy chỉnh style cho nút xóa ảnh và đính kèm */
+            .clear-image-btn {
+                margin-top: 32px !important;
+                background-color: #ff6b6b !important;
+                color: white !important;
+            }
+            .attach-btn {
+                font-size: 20px !important;
+                padding: 10px !important;
+            }
             """
         ) as interface:
             
@@ -821,14 +829,27 @@ class MedicalAIChatbot:
                             scale=4,
                             lines=2
                         )
+                        # Nút đính kèm tài liệu được đặt giữa msg_input và send_btn
+                        attach_btn = gr.Button("📎", size="sm", scale=0.5, elem_classes=["attach-btn"], tooltip="Attach Document")
                         send_btn = gr.Button("📤 Send", variant="primary", scale=1)
                     
-                    # Image upload
-                    image_input = gr.Image(
-                        label="🖼️ Upload endoscopy image",
-                        type="filepath",
-                        elem_classes=["upload-container"]
+                    # File uploader cho tài liệu (mặc định hiển thị)
+                    doc_input = gr.File(
+                        label="📄 Attach Document (PDF, DOCX, TXT)",
+                        file_types=[".pdf", ".docx", ".txt"],
+                        elem_id="doc_uploader"
                     )
+                    
+                    # Image upload - Thêm vào layout row để có thể đặt nút xóa bên cạnh
+                    with gr.Row():
+                        image_input = gr.Image(
+                            label="🖼️ Upload endoscopy image",
+                            type="filepath",
+                            elem_classes=["upload-container"],
+                            scale=4
+                        )
+                        # Nút xóa ảnh đặt bên cạnh image_input với tooltip giải thích
+                        clear_image_btn = gr.Button("❌ Xóa ảnh", size="md", scale=1, elem_classes=["clear-image-btn"], tooltip="Clear uploaded image")
                 
                 with gr.Column(scale=1):
                     # User info panel
@@ -1012,6 +1033,37 @@ class MedicalAIChatbot:
                 refresh_sessions,
                 inputs=[username_input],
                 outputs=[session_dropdown, load_session_btn, stats_display]
+            )
+            
+            # Sự kiện xóa ảnh
+            def clear_image():
+                return None
+            clear_image_btn.click(
+                clear_image,
+                outputs=[image_input]
+            )
+            
+            # Sự kiện nhấn nút đính kèm để hiện file uploader
+            def toggle_doc_uploader(visibility):
+                return gr.update(visible=not visibility)
+            
+            # Thay vì chỉ hiện file uploader, ta toggle (ẩn/hiện) nó khi nhấn nút
+            attach_btn.click(
+                toggle_doc_uploader,
+                inputs=[doc_input],
+                outputs=[doc_input]
+            )
+            
+            # Khi upload xong file, hiển thị tên file đã đính kèm
+            def on_doc_upload(file):
+                if file:
+                    return f"Đã đính kèm: {file.name}"
+                return "Chưa đính kèm tài liệu"
+            
+            doc_input.change(
+                on_doc_upload,
+                inputs=[doc_input],
+                outputs=[msg_input]
             )
         
         return interface

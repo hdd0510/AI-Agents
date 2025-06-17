@@ -472,53 +472,36 @@ Analyze the tool results above and provide a comprehensive final medical consult
 **Format your response as a complete medical consultation answer.**"""
 
     def _format_agent_result(self, react_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Format VQA result."""
-        if not react_result.get("success", False):
-            self.logger.error("="*50)
-            self.logger.error("VQA PROCESSING FAILED")
-            self.logger.error(f"Error: {react_result.get('error', 'Unknown error')}")
-            self.logger.error("="*50)
-            
-            return {
-                "vqa_result": {
-                    "success": False,
-                    "error": react_result.get("error", "VQA processing failed"),
-                    "approach": "llava"
-                }
+        """Format the agent result with standard form and add context for next agent."""
+        result = {
+            "vqa_result": {
+                "success": react_result.get("success", False),
+                "answer": react_result.get("answer", ""),
+                "iterations_used": react_result.get("iterations_used", self.max_iterations),
+                "termination_reason": react_result.get("termination_reason", "unknown"),
             }
-        
-        # Extract answer and confidence
-        answer = react_result.get("answer", "")
-        confidence = react_result.get("confidence", 0.0)
-        
-        # Check if RAG information was used
-        used_rag = False
-        if hasattr(self, 'react_history'):
-            for step in self.react_history:
-                if step.observation and "rag_result" in step.observation:
-                    used_rag = True
-                    break
-        
-        # Create final result
-        vqa_result = {
-            "success": True,
-            "answer": answer,
-            "confidence": confidence,
-            "approach": "llava",
-            "used_rag": used_rag
         }
         
-        self.logger.info("="*50)
-        self.logger.info("FINAL VQA RESULT FORMATTED")
-        self.logger.info(f"Success: {vqa_result['success']}")
-        self.logger.info(f"Approach: {vqa_result['approach']}")
-        self.logger.info(f"Used RAG: {vqa_result['used_rag']}")
-        self.logger.info(f"Answer: {answer[:]}")
-        self.logger.info(f"Termination reason: {react_result.get('termination_reason', 'unknown')}")
-        self.logger.info(f"Iterations used: {react_result.get('iterations_used', 0)}")
-        self.logger.info("="*50)
+        # Add context for next agent
+        context_for_next = {
+            "agent_type": "vqa",
+            "success": react_result.get("success", False),
+            "query_analyzed": self.current_task_input.get("query", "")[:100] + "..." if len(self.current_task_input.get("query", "")) > 100 else self.current_task_input.get("query", ""),
+            "answer_summary": react_result.get("answer", "")[:200] + "..." if len(react_result.get("answer", "")) > 200 else react_result.get("answer", "")
+        }
         
-        return {"vqa_result": vqa_result}
+        # Add information about image analyzed
+        if "image_path" in self.current_task_input:
+            context_for_next["image_analyzed"] = self.current_task_input["image_path"]
+        
+        # Add information about previous context that was used
+        if "previous_context" in self.current_task_input:
+            prev_agent = self.current_task_input["previous_context"].get("agent_type", "unknown")
+            context_for_next["previous_agent_used"] = prev_agent
+        
+        result["context_for_next_agent"] = context_for_next
+        
+        return result
 
     def initialize(self) -> bool:
         """Initialize VQA agent."""
@@ -531,115 +514,140 @@ Analyze the tool results above and provide a comprehensive final medical consult
             return False
 
     def _extract_task_input(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract task input."""
-        # Store the current state for later access to detector result
-        self.current_state = state
-        
-        medical_context = state.get("medical_context")
-        medical_context = medical_context.copy() if medical_context else {}
-        
-        # Add context from other agents
-        if "detector_result" in state:
-            detector = state["detector_result"]
-            if detector.get("success", False):
-                medical_context["polyp_detection"] = {
-                    "count": detector.get("count", 0),
-                    "objects": detector.get("objects", [])
-                }
-        
-        if "modality_result" in state:
-            modality = state["modality_result"]
-            if modality.get("success", False):
-                medical_context["imaging_technique"] = {
-                    "type": modality.get("class_name", "unknown"),
-                    "confidence": modality.get("confidence", 0)
-                }
-        
-        if "region_result" in state:
-            region = state["region_result"]
-            if region.get("success", False):
-                medical_context["anatomical_region"] = {
-                    "location": region.get("class_name", "unknown"),
-                    "confidence": region.get("confidence", 0)
-                }
-        
-        # Get RAG results if available
-        rag_result = state.get("rag_result", {})
-        
-        # Log the image path information to help with debugging
-        image_path = state.get("image_path", "")
-        if image_path:
-            self.logger.info(f"VQA received image path: {image_path}")
-            if os.path.exists(image_path):
-                self.logger.info(f"Image exists and will be used for VQA analysis")
-            else:
-                self.logger.warning(f"Image path provided but file does not exist: {image_path}")
-        else:
-            self.logger.info("No image path received, will process as text-only query")
-        
-        # If there are polyp detection results, verify that we maintain the image path
-        if "detector_result" in state and state.get("image_path") and not state.get("is_text_only", False):
-            self.logger.info(f"Multi-task workflow: using image from detector task: {state.get('image_path')}")
-            # Force is_text_only to False to ensure image is used
-            state["is_text_only"] = False
-        
-        # Get the query and process it to extract only useful information
-        query = state.get("query", "")
-        processed_query = self._process_user_query(query)
-        
-        return {
-            "image_path": image_path,
-            "query": processed_query,
-            "medical_context": medical_context,
-            "is_text_only": state.get("is_text_only", False),
-            "rag_result": rag_result
-        }
+        """Extracts required task inputs from state."""
+        try:
+            # Required fields
+            image_path = state.get("image_path", "")
+            query = state.get("query", "")
+            
+            # Optional fields
+            medical_context = state.get("medical_context", {})
+            
+            # Get detector result if available
+            detector_result = state.get("detector_result", {})
+            
+            # Create task input
+            task_input = {
+                "image_path": image_path,
+                "query": query,
+                "medical_context": medical_context
+            }
+            
+            # Add detector results if available
+            if detector_result:
+                task_input["detector_result"] = detector_result
+            
+            # Get context from previous agent if available
+            if "context_from_previous_agent" in state or "context_for_next_agent" in state:
+                # Support both naming conventions
+                prev_context = state.get("context_from_previous_agent", state.get("context_for_next_agent", {}))
+                task_input["previous_context"] = prev_context
+                
+                # Log information about the previous agent
+                if isinstance(prev_context, dict):
+                    prev_agent = prev_context.get("agent_type", "unknown")
+                    self.logger.info(f"Received context from previous agent: {prev_agent}")
+                    
+                    # If we have detector context, extract polyp information
+                    if prev_agent == "detector" and prev_context.get("success", False):
+                        polyp_count = prev_context.get("polyp_count", 0)
+                        self.logger.info(f"Previous detector found {polyp_count} polyps")
+                        
+                        # Add to medical context for better tool calls
+                        if "medical_context" not in task_input:
+                            task_input["medical_context"] = {}
+                        
+                        task_input["medical_context"]["detected_polyps"] = polyp_count
+                        
+                        # Add first polyp details if available
+                        if "first_polyp" in prev_context:
+                            task_input["medical_context"]["polyp_details"] = prev_context["first_polyp"]
+            
+            return task_input
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting task input: {str(e)}")
+            # Fallback to basic input
+            return {
+                "image_path": state.get("image_path", ""),
+                "query": state.get("query", ""),
+                "medical_context": state.get("medical_context", {})
+            }
 
     def _format_task_input(self, task_input: Dict[str, Any]) -> str:
-        """Format task input for VQA processing."""
+        """Format task input for LLM."""
         query = task_input.get("query", "")
-        # Process the query to extract only useful information
-        query = self._process_user_query(query)
         image_path = task_input.get("image_path", "")
-        medical_context = task_input.get("medical_context", {})
-        rag_result = task_input.get("rag_result", {})
+        medical_context_dict = task_input.get("medical_context", {})
         
-        # Build context string
-        context_parts = []
-        if medical_context:
-            if "polyp_findings" in medical_context:
-                findings = medical_context["polyp_findings"]
-                context_parts.append(f"- Polyp detection: {findings['count']} polyp(s) found")
-            if "imaging_type" in medical_context:
-                context_parts.append(f"- Imaging type: {medical_context['imaging_type']}")
-            if "anatomical_region" in medical_context:
-                context_parts.append(f"- Anatomical region: {medical_context['anatomical_region']}")
+        # Format medical context info
+        medical_context_info = ""
+        if medical_context_dict:
+            medical_context_info = "\nMedical Context:\n"
+            for key, value in medical_context_dict.items():
+                if isinstance(value, dict):
+                    medical_context_info += f"- {key}:\n"
+                    for sub_key, sub_value in value.items():
+                        medical_context_info += f"  - {sub_key}: {sub_value}\n"
+                else:
+                    medical_context_info += f"- {key}: {value}\n"
         
-        context_str = "\n".join(context_parts) if context_parts else "No additional context"
+        # Format previous agent context
+        previous_agent_info = ""
+        if "previous_context" in task_input:
+            prev_context = task_input["previous_context"]
+            if isinstance(prev_context, dict):
+                previous_agent_info = "\n\nINFORMATION FROM PREVIOUS AGENT:\n"
+                for key, value in prev_context.items():
+                    if isinstance(value, dict):
+                        previous_agent_info += f"- {key}:\n"
+                        for sub_key, sub_value in value.items():
+                            previous_agent_info += f"  - {sub_key}: {sub_value}\n"
+                    else:
+                        previous_agent_info += f"- {key}: {value}\n"
+                        
+                # Special handling for detector results
+                if prev_context.get("agent_type") == "detector" and prev_context.get("success", False):
+                    polyp_count = prev_context.get("polyp_count", 0)
+                    if polyp_count > 0 and "first_polyp" in prev_context:
+                        confidence = prev_context["first_polyp"].get("confidence", "unknown")
+                        position = prev_context["first_polyp"].get("position", "unknown")
+                        previous_agent_info += f"\nDetector found {polyp_count} polyp(s). First polyp has confidence {confidence} at position {position}.\n"
+                    else:
+                        previous_agent_info += f"\nDetector found {polyp_count} polyps.\n"
+                        
+                    # Add analysis summary if available
+                    if "analysis_summary" in prev_context:
+                        previous_agent_info += f"Detector's analysis: {prev_context['analysis_summary']}\n"
         
-        # Add RAG information if available
-        rag_info = ""
-        if rag_result and rag_result.get("success", False):
-            if "vqa_summary" in rag_result and rag_result["vqa_summary"]:
-                rag_info = f"\nRelevant information from documents:\n{rag_result['vqa_summary']}"
+        # Include detector result if available for more context
+        detector_info = ""
+        if "detector_result" in task_input:
+            detector_result = task_input["detector_result"]
+            if isinstance(detector_result, dict) and detector_result.get("success", False):
+                count = detector_result.get("count", 0)
+                detector_info = f"\n\nDetector Result:\n- Found {count} polyp(s)\n"
+                
+                if "objects" in detector_result and len(detector_result["objects"]) > 0:
+                    first_polyp = detector_result["objects"][0]
+                    detector_info += f"- First polyp confidence: {first_polyp.get('confidence', 'unknown')}\n"
+                    detector_info += f"- Position: {first_polyp.get('position_description', 'unknown')}\n"
+                
+                if "analysis" in detector_result:
+                    detector_info += f"- Analysis: {detector_result['analysis'][:200]}...\n" if len(detector_result.get("analysis", "")) > 200 else f"- Analysis: {detector_result.get('analysis', '')}\n"
         
-        return f"""**MEDICAL AI VISUAL QUESTION ANSWERING TASK**
+        formated_input = f"""MEDICAL CONSULTATION REQUEST
 
-User Query: "{query}"
+User Query: {query}
+Image Path: {image_path}{medical_context_info}{detector_info}{previous_agent_info}
 
-Medical Context:
-{context_str}
-{rag_info}
+You are a medical VQA specialist. Use llava_vqa tool to analyze the image in relation to the user's query.
+Consider any information from previous agents in your analysis.
 
-Your task as a Medical AI Assistant:
-1. Analyze the medical image and provide a detailed professional assessment
-2. If document information is provided, incorporate it into your medical analysis
-3. Ensure your answer is comprehensive and well-supported by clinical evidence
-4. Use appropriate medical terminology while maintaining clarity
-5. Always identify yourself as a Medical AI Assistant specializing in healthcare
-
-Begin with medical image analysis:"""
-
+"""
+        
+        return formated_input
+        
     def _execute_tool(self, action: str, action_input: Dict[str, Any]) -> str:
         """Execute tool with improved image handling."""
         # Process query if this is the LLaVA tool
@@ -653,6 +661,22 @@ Begin with medical image analysis:"""
             if image_path and os.path.exists(image_path) and "image_path" not in action_input:
                 self.logger.info(f"Adding missing image_path to llava_vqa tool call: {image_path}")
                 action_input["image_path"] = image_path
+            
+            # Ensure medical_context is included
+            if "medical_context" not in action_input and "medical_context" in self.current_task_input:
+                medical_context = self.current_task_input.get("medical_context", {})
+                if medical_context:
+                    self.logger.info(f"Adding medical_context to llava_vqa tool call: {json.dumps(medical_context)[:100]}...")
+                    action_input["medical_context"] = medical_context
+        
+        # Log the actual parameters being sent to the tool
+        if action == "llava_vqa":
+            self.logger.info(f"LLaVA tool parameters:")
+            for key, value in action_input.items():
+                if key == "medical_context":
+                    self.logger.info(f"- medical_context: {json.dumps(value)[:150]}...")
+                else:
+                    self.logger.info(f"- {key}: {value if key != 'query' else value[:50] + '...'}")
         
         # Call the base class implementation
         tool = next((t for t in self.tools if t.name == action), None)

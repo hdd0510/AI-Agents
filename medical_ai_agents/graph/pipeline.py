@@ -17,7 +17,7 @@ from medical_ai_agents.agents.classifier import ClassifierAgent
 from medical_ai_agents.agents.vqa import VQAAgent
 from medical_ai_agents.agents.rag import RAGAgent
 from medical_ai_agents.graph.nodes import (
-    task_analyzer, result_synthesizer, task_completion_wrapper
+    task_analyzer, result_synthesizer, task_completion_wrapper, document_embedding
 )
 from medical_ai_agents.graph.routers import (
     task_router, post_detector_router, 
@@ -73,6 +73,7 @@ def create_medical_ai_graph(config: MedicalGraphConfig):
     workflow = StateGraph(SystemState)
     
     # Add nodes - MODIFIED with task completion wrappers
+    workflow.add_node("document_embedding", lambda state: document_embedding(state, rag_agent))
     workflow.add_node("task_analyzer", lambda state: task_analyzer(state, llm))
     # Add with task completion wrapper for proper state management
     workflow.add_node("detector", task_completion_wrapper(detector_agent, "polyp_detection"))
@@ -83,7 +84,10 @@ def create_medical_ai_graph(config: MedicalGraphConfig):
     workflow.add_node("synthesizer", lambda state: result_synthesizer(state, llm))
     
     # Add edges with multi-task routing
-    workflow.set_entry_point("task_analyzer")
+    workflow.set_entry_point("document_embedding")
+    
+    # Add edge from document_embedding to task_analyzer
+    workflow.add_edge("document_embedding", "task_analyzer")
     
     # conditional edges with improved logging
     workflow.add_conditional_edges(

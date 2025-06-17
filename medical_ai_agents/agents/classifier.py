@@ -89,8 +89,6 @@ CORE REQUIREMENTS (MUST achieve):
 
 ADAPTIVE STRATEGIES:
 - Direct approach for clear images (fastest)
-- Validation approach for uncertain cases
-- Thorough approach for complex images
 
 EXAMPLES:
 Thought: "Your reasoning"
