@@ -162,7 +162,7 @@ Choose your strategy and start:"""
             region = state["region_result"]
             if region.get("success", False):
                 context["anatomical_region"] = {
-                    "location": region.get("class_name", "Unknown"),
+                    "region": region.get("class_name", "Unknown"),
                     "confidence": region.get("confidence", 0)
                 }
         
@@ -188,17 +188,17 @@ Choose your strategy and start:"""
                 context_parts.append(f"- Imaging technique: {mod['type']} ({mod['confidence']:.1%} confidence)")
             if "anatomical_region" in context:
                 reg = context["anatomical_region"]
-                context_parts.append(f"- Anatomical location: {reg['location']} ({reg['confidence']:.1%} confidence)")
+                context_parts.append(f"- Anatomical region: {reg['region']} ({reg['confidence']:.1%} confidence)")
         
         context_str = "\n".join(context_parts) if context_parts else "No previous analysis context"
         
         # Classification-specific task description
         if classifier_type == "modality":
             task_desc = """Classify the endoscopy imaging modality/technique:
-- WLI (White Light Imaging): Thực tế là LCI - Enhanced visualization with color contrast for lesion detection
-- BLI (Blue Light Imaging): Thực tế là WLI - Standard visualization technique
-- FICE (Flexible spectral Imaging Color Enhancement): Thực tế là BLI - Enhanced visualization of blood vessels and surface patterns
-- LCI (Linked Color Imaging): Thực tế là FICE - Digital chromoendoscopy for mucosal assessment"""
+- WLI (White Light Imaging): Actually LCI - Enhanced visualization with color contrast for lesion detection
+- BLI (Blue Light Imaging): Actually WLI - Standard visualization technique
+- FICE (Flexible spectral Imaging Color Enhancement): Actually BLI - Enhanced visualization of blood vessels and surface patterns
+- LCI (Linked Color Imaging): Actually FICE - Digital chromoendoscopy for mucosal assessment"""
         else:  # region
             task_desc = """Classify the anatomical region in the GI tract:
 - Hau_hong (Pharynx): Throat region
@@ -207,7 +207,7 @@ Choose your strategy and start:"""
 - Than_vi (Body): Main stomach body
 - Phinh_vi (Fundus): Upper stomach portion
 - Hang_vi (Antrum): Lower stomach portion  
-- Bo_cong_lon/nho: Greater/Lesser curvature
+- Bo_cong_lon/nho (Greater/Lesser curvature): Stomach curvatures
 - Hanh_ta_trang (Duodenal bulb): First duodenum part
 - Ta_trang (Duodenum): Duodenal segment"""
 
@@ -375,42 +375,42 @@ Choose your adaptive strategy and proceed:"""
         # LLM-based synthesis - adaptive based on confidence level
         if is_low_confidence and image_path:
             # Enhanced prompt for low confidence scenarios with image reference
-            prompt = f"""Bạn là chuyên gia nội soi. Đây là kết quả phân loại {self.classifier_type} với ĐỘ TIN CẬY THẤP. Hãy xem xét ảnh để tư vấn lại kết quả (có thể là class loại khác) nếu cần hoặc thông báo không chắc chắn cần kiểm định lại.
+            prompt = f"""You are an endoscopy expert. The following is a {self.classifier_type} classification result with LOW CONFIDENCE. Review the image to provide an assessment of the result (suggesting a different class if needed) or indicate uncertainty requiring further verification.
 
-Thông tin ảnh:
-- Đường dẫn ảnh: {image_path}
-- Câu hỏi của người dùng: "{query if query else f'Phân loại {self.classifier_type} trong ảnh nội soi này'}"
+Image Information:
+- Image path: {image_path}
+- User query: "{query if query else f'Classify the {self.classifier_type} in this endoscopy image'}"
 
-Kết quả phân loại: 
-- Kết quả: {class_name} 
-- Độ tin cậy: {confidence:.1%} (THẤP)
-- Các lớp khác: {all_classes}
-- Mô tả: {description}
+Classification Result: 
+- Result: {class_name} 
+- Confidence: {confidence:.1%} (LOW)
+- Other classes: {all_classes}
+- Description: {description}
 
-NHIỆM VỤ CỦA BẠN:
-1. Xác nhận ĐỘ TIN CẬY THẤP cho kết quả {class_name}
-2. Phân tích PHÂN PHỐI XÁC SUẤT của các lớp khác
-3. Đề xuất kết luận phù hợp nhất dựa trên kiến thức y khoa của bạn
-4. Mô tả ý nghĩa lâm sàng và khuyến nghị
+YOUR TASK:
+1. Acknowledge the LOW CONFIDENCE for the result {class_name}
+2. Analyze the PROBABILITY DISTRIBUTION of other classes
+3. Suggest the most appropriate conclusion based on your medical knowledge
+4. Describe clinical significance and recommendations
 
-QUAN TRỌNG: Hãy nêu rõ đây là đánh giá với độ tin cậy thấp và cần thêm kiểm tra bởi chuyên gia."""
+IMPORTANT: Clearly indicate this is a low confidence assessment requiring expert verification."""
         else:
             # Standard prompt for normal confidence
-            prompt = f"""Bạn là chuyên gia nội soi. Hãy giải thích kết quả phân loại sau cho bệnh nhân một cách dễ hiểu và chuyên nghiệp:
+            prompt = f"""You are an endoscopy expert. Please explain the following classification result to the patient in an accessible and professional manner:
 
-- Kết quả: {class_name}
-- Độ tin cậy: {confidence:.1%}
-- Các lớp khác: {all_classes}
-- Mô tả: {description}
+- Result: {class_name}
+- Confidence: {confidence:.1%}
+- Other classes: {all_classes}
+- Description: {description}
 
-Hãy đưa ra nhận định lâm sàng, ý nghĩa kết quả và khuyến nghị nếu có."""
+Please provide a clinical assessment, the significance of the result, and any recommendations if applicable."""
         
-        prompt += "Với những class tiếng việt không dấu thì hãy dịch sang tiếng việt trước rồi chuyển đổi thành tiếng anh nếu cần."
+        prompt += " For any Vietnamese class names without accents, please translate them to Vietnamese first and then to English if needed."
 
         try:
             llm_answer = self.llm.invoke([{"role": "user", "content": prompt}]).content.strip()
         except Exception as e:
-            llm_answer = "Không thể tạo nhận định tự động: " + str(e)
+            llm_answer = "Unable to generate automatic assessment: " + str(e)
         
         # Store current task input for image base64 inclusion
         task_input = getattr(self, 'current_task_input', {})
@@ -557,10 +557,10 @@ Image Information (base64 string only, not actual image):
     def _get_modality_advantages(self, modality: str) -> List[str]:
         """Get clinical advantages of imaging modality."""
         advantages_map = {
-            "WLI": ["Enhanced color contrast", "Better inflammation visualization", "Improved polyp detection", "Subtle lesion detection"],  # WLI thực tế là LCI
-            "BLI": ["Standard visualization", "Natural colors", "General screening", "Baseline reference"],  # BLI thực tế là WLI
-            "FICE": ["Enhanced vasculature", "Better lesion detection", "Improved contrast", "Surface pattern analysis"],  # FICE thực tế là BLI
-            "LCI": ["Digital enhancement", "Customizable settings", "Color difference detection", "Inflammatory assessment"]  # LCI thực tế là FICE
+            "WLI": ["Enhanced color contrast", "Better inflammation visualization", "Improved polyp detection", "Subtle lesion detection"],  # WLI actually is LCI
+            "BLI": ["Standard visualization", "Natural colors", "General screening", "Baseline reference"],  # BLI actually is WLI
+            "FICE": ["Enhanced vasculature", "Better lesion detection", "Improved contrast", "Surface pattern analysis"],  # FICE actually is BLI
+            "LCI": ["Digital enhancement", "Customizable settings", "Color difference detection", "Inflammatory assessment"]  # LCI actually is FICE
         }
         return advantages_map.get(modality, ["Standard endoscopic visualization"])
     

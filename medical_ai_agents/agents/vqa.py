@@ -23,6 +23,15 @@ class VQAAgent(BaseAgent):
     
     def __init__(self, model_path: str, llm_model: str = "gpt-4o-mini", device: str = "cuda"):
         self.model_path = model_path
+        
+        # Validate device setting
+        import torch
+        if device == "cuda" and not torch.cuda.is_available():
+            logging.warning("CUDA requested for VQA Agent but not available, falling back to CPU")
+            device = "cpu"
+        
+        logging.info(f"VQA Agent initializing with device: {device}")
+        
         super().__init__(name="VQA Agent", llm_model=llm_model, device=device)
         
         # Simple config
@@ -468,6 +477,7 @@ Analyze the tool results above and provide a comprehensive final medical consult
 4. If you can see both the original image and detector visualization, compare them and verify the detector's findings
 5. Recommend next steps or follow-up if needed
 6. Be concise but thorough
+7. Do not use any user/patient information in your response.
 
 **Format your response as a complete medical consultation answer.**"""
 
@@ -718,12 +728,6 @@ Consider any information from previous agents in your analysis.
             
             # Log the query transformation
             self.logger.info(f"Query transformation - Original: '{query[:50]}...', Processed: '{processed_query[:50]}...'")
-            
-            # If the processed query is empty or significantly shorter than the original,
-            # fall back to the original to avoid losing important information
-            if not processed_query or len(processed_query) < len(query) * 0.3:
-                self.logger.warning("Processed query too short, falling back to original")
-                return query
                 
             return processed_query
             

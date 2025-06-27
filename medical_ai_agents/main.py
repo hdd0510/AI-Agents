@@ -133,8 +133,11 @@ class EnhancedMedicalAISystem:
             # If history already exists, log what we have
             self.logger.info(f"Using existing conversation history with {len(history)} entries")
             # Log the last entry for debugging
-            if history[-1].get("query"):
-                self.logger.info(f"Last history entry: '{history[-1].get('query', '')[:30]}...'")
+            if history and len(history) > 0:
+                if isinstance(history[-1], dict) and history[-1].get("query"):
+                    self.logger.info(f"Last history entry: '{history[-1].get('query', '')[:30]}...'")
+                elif isinstance(history[-1], list) and len(history[-1]) >= 1:
+                    self.logger.info(f"Last history entry (UI format): '{history[-1][0][:30]}...'")
             # Don't reset history!
         
         # Clean up any pending entries that match the current query

@@ -22,7 +22,7 @@ from medical_ai_agents.graph.nodes import (
 from medical_ai_agents.graph.routers import (
     task_router, post_detector_router, 
     post_modality_router, post_region_router, 
-    post_vqa_router, post_rag_router
+    post_vqa_router, post_rag_router, post_vqa_router_with_rag
 )
 
 def create_medical_ai_graph(config: MedicalGraphConfig):
@@ -84,12 +84,13 @@ def create_medical_ai_graph(config: MedicalGraphConfig):
     workflow.add_node("synthesizer", lambda state: result_synthesizer(state, llm))
     
     # Add edges with multi-task routing
+    # MODIFIED: Luôn bắt đầu với document_embedding để kiểm tra và xử lý tài liệu trước
     workflow.set_entry_point("document_embedding")
     
     # Add edge from document_embedding to task_analyzer
     workflow.add_edge("document_embedding", "task_analyzer")
     
-    # conditional edges with improved logging
+    # conditional edges với logging cải tiến
     workflow.add_conditional_edges(
         "task_analyzer",
         task_router,
@@ -103,23 +104,7 @@ def create_medical_ai_graph(config: MedicalGraphConfig):
         }
     )
 
-    workflow.add_conditional_edges(
-        "rag",
-        post_rag_router,
-        {
-            "vqa": "vqa",
-            "synthesizer": "synthesizer"
-        }
-    )
-    
-    workflow.add_conditional_edges(
-        "vqa",
-        post_vqa_router,
-        {
-            "synthesizer": "synthesizer"
-        }
-    )
-    
+    # MODIFICATION: Cập nhật routing để đảm bảo RAG luôn được ưu tiên khi có tài liệu
     workflow.add_conditional_edges(
         "detector",
         post_detector_router,
@@ -127,6 +112,7 @@ def create_medical_ai_graph(config: MedicalGraphConfig):
             "modality_classifier": "modality_classifier", 
             "region_classifier": "region_classifier",
             "vqa": "vqa",
+            "rag": "rag",  # Added RAG as possible next step
             "synthesizer": "synthesizer"
         }
     )
@@ -137,8 +123,9 @@ def create_medical_ai_graph(config: MedicalGraphConfig):
         {
             "region_classifier": "region_classifier",
             "vqa": "vqa",
+            "rag": "rag",  # Added RAG as possible next step
             "synthesizer": "synthesizer",
-            "detector": "detector"  # Added to handle special case when polyp_detection isn't completed
+            "detector": "detector"  # Thêm để xử lý trường hợp đặc biệt khi polyp_detection chưa hoàn thành
         }
     )
     
@@ -147,18 +134,34 @@ def create_medical_ai_graph(config: MedicalGraphConfig):
         post_region_router,
         {
             "vqa": "vqa",
+            "rag": "rag",  # Added RAG as possible next step
             "synthesizer": "synthesizer",
-            "detector": "detector",  # Added to handle special case when polyp_detection isn't completed
-            "modality_classifier": "modality_classifier"  # Another backup path
+            "detector": "detector",  # Thêm để xử lý trường hợp đặc biệt khi polyp_detection chưa hoàn thành
+            "modality_classifier": "modality_classifier"  # Đường dẫn dự phòng khác
+        }
+    )
+    
+    # Sử dụng post_vqa_router đã cập nhật để kiểm tra đúng tài liệu có sẵn
+    workflow.add_conditional_edges(
+        "vqa",
+        post_vqa_router,
+        {
+            "rag": "rag",  # Luôn xem xét RAG như một bước tiếp theo có thể
+            "synthesizer": "synthesizer"
+        }
+    )
+
+    # MODIFIED: Cập nhật logic routing sau RAG để xem xét kết quả embedding và phức tạp của truy vấn
+    workflow.add_conditional_edges(
+        "rag",
+        post_rag_router,
+        {
+            "vqa": "vqa",  # Có thể chuyển đến VQA nếu là câu hỏi y tế phức tạp
+            "synthesizer": "synthesizer"  # Trực tiếp đến synthesizer nếu là truy vấn tài liệu đơn giản
         }
     )
     
     workflow.add_edge("synthesizer", END)
     
-    # Compile with checkpointing
-    if config.checkpoint_dir and os.path.exists(config.checkpoint_dir):
-        logger.info(f"Adding checkpointing to {config.checkpoint_dir}")
-        checkpointer = MemorySaver()
-        return workflow.compile(checkpointer=checkpointer)
-    else:
-        return workflow.compile()
+    # Compile với checkpointing
+    return workflow.compile()

@@ -11,11 +11,12 @@ Initialization file for the RAG tools package.
 from medical_ai_agents.tools.rag.doc_reader import PDFDocReaderTool
 from medical_ai_agents.tools.rag.vector_search import VectorSearchTool
 from medical_ai_agents.tools.rag.chunk_retriever import ChunkRetrieverTool
-from medical_ai_agents.tools.rag.doc_retrieval import DocumentRetrievalTool
+from medical_ai_agents.tools.rag.lightrag_tool import LightRagTool
 
 __all__ = [
     'PDFDocReaderTool',
     'VectorSearchTool',
     'ChunkRetrieverTool',
-    'DocumentRetrievalTool'
+    'DocumentRetrievalTool',
+    'LightRagTool'
 ]

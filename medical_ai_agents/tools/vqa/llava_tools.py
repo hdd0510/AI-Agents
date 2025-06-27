@@ -58,6 +58,14 @@ class LLaVATool(BaseTool):
             
             self.logger.info(f"Loading LLaVA model: {model_name} from {self.model_path}")
             
+            # Validate device setting
+            import torch
+            if self.device == "cuda" and not torch.cuda.is_available():
+                self.logger.warning("CUDA requested but not available, falling back to CPU")
+                self.device = "cpu"
+            
+            self.logger.info(f"Using device: {self.device}")
+            
             # Load model với exact same parameters như CLI
             self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(
                 self.model_path, 
@@ -67,6 +75,10 @@ class LLaVATool(BaseTool):
                 self.load_4bit, 
                 device=self.device
             )
+            
+            # Explicitly move model to specified device
+            self.model = self.model.to(self.device)
+            self.logger.info(f"Model loaded and moved to {self.device}")
             
             # Determine conversation mode như CLI
             if "llama-2" in model_name.lower():
@@ -160,12 +172,19 @@ class LLaVATool(BaseTool):
             
             image_size = image.size
             
+            # Ensure model is on the correct device
+            self.model = self.model.to(self.device)
+            self.logger.info(f"Model confirmed on device: {self.device}")
+            
             # Process images exactly like CLI
             image_tensor = process_images([image], self.image_processor, self.model.config)
+            # Ensure image tensor is on the same device as the model
             if type(image_tensor) is list:
-                image_tensor = [img.to(self.model.device, dtype=torch.float16) for img in image_tensor]
+                image_tensor = [img.to(self.device, dtype=torch.float16) for img in image_tensor]
+                self.logger.info(f"Image tensor list moved to {self.device}")
             else:
-                image_tensor = image_tensor.to(self.model.device, dtype=torch.float16)
+                image_tensor = image_tensor.to(self.device, dtype=torch.float16)
+                self.logger.info(f"Image tensor moved to {self.device}")
             
             # Setup conversation template
             conv = conv_templates[self.conv_mode].copy()
@@ -213,8 +232,17 @@ Remember to recommend direct medical consultation when appropriate and avoid def
             conv.append_message(conv.roles[1], None)
             prompt = conv.get_prompt()
             
-            # Tokenize using CLI method
-            input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(self.model.device)
+            # Tokenize using CLI method and ensure it's on the correct device
+            input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0)
+            input_ids = input_ids.to(self.device)  # Explicit device setting
+            self.logger.info(f"Input IDs tensor moved to {self.device}")
+            
+            # Log device information for debugging
+            self.logger.info(f"Model device: {self.model.device}, Input IDs device: {input_ids.device}")
+            if type(image_tensor) is list:
+                self.logger.info(f"Image tensor devices: {[img.device for img in image_tensor]}")
+            else:
+                self.logger.info(f"Image tensor device: {image_tensor.device}")
             
             # Generate with exact CLI parameters
             with torch.inference_mode():

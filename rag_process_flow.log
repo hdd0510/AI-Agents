@@ -1,0 +1,9 @@
+[2025-06-28 01:38:20,950] [INFO] [medical-ai.rag-agent] - RAGAgent initializing with storage path: medical_ai_agents/rag_storage
+[2025-06-28 01:38:20,951] [INFO] [medical-ai.rag-agent] - LLM model: gpt-4o-mini, Device: cuda
+[2025-06-28 01:38:21,061] [INFO] [medical-ai.rag-agent] - Registering LightRAG tool
+[2025-06-28 01:38:40,717] [INFO] [medical-ai.rag-agent] - RAGAgent initializing with storage path: ./rag_storage
+[2025-06-28 01:38:40,717] [INFO] [medical-ai.rag-agent] - LLM model: gpt-4o-mini, Device: cuda
+[2025-06-28 01:38:40,731] [INFO] [medical-ai.rag-agent] - Registering LightRAG tool
+[2025-06-28 01:38:40,731] [ERROR] [medical-ai.rag-agent] - Error checking document status: 'NoneType' object has no attribute '_check_status'
+[2025-06-28 01:38:40,731] [INFO] [medical-ai.rag-agent] - Adding 1 documents to LightRAG
+[2025-06-28 01:38:40,731] [INFO] [medical-ai.rag-agent] - Processing document: 20214882_Thesis_HoangDinhDung_20242.pdf

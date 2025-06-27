@@ -123,7 +123,8 @@ CORRECT WORKFLOW STEPS (follow this sequence):
 
 ERROR HANDLING:
 - If no polyps found at standard threshold (0.25), try lower conf_thresh (0.1-0.2)
-- Always mention location and confidence score of polyps in final answer
+- Always include specific location of polyps (e.g., "top left", "middle center") in your final answer
+- Include confidence scores for each detected polyp
 - Don't repeat the same action multiple times without changing parameters
 
 CRITICAL REMINDER: After performing visualize_detections, you should always proceed to Final Answer!"""
@@ -216,7 +217,7 @@ STRATEGY:
 5. Analyze the query and decide whether to show visualization to the user
    - If user explicitly asks to see/visualize, set show_visualization=true
    - If query is just asking for polyp detection without visualization, set show_visualization=false
-6. Provide detailed medical assessment
+6. Provide detailed medical assessment with EXPLICIT LOCATION for each polyp (e.g., "top left", "bottom center")
 
 Begin your analysis now:"""
 
@@ -513,9 +514,10 @@ SYNTHESIS REQUIREMENTS:
 1. Review the detection results carefully
 2. Analyze the visualization I created to verify findings
 3. Provide comprehensive medical assessment
-4. Include confidence levels and clinical recommendations
-5. Analyze if the user wants to see visualization in their query
-6. Set show_visualization=true/false based on user's intention
+4. Include EXACT LOCATION of each polyp (e.g., "top left", "bottom center")
+5. Include confidence levels and clinical recommendations
+6. Analyze if the user wants to see visualization in their query
+7. Set show_visualization=true/false based on user's intention
 
 Please provide your final medical assessment:"""
 
@@ -582,10 +584,23 @@ Please provide your final medical assessment:"""
         visualization_data = react_result.get("visualization_data", {})
         show_visualization = react_result.get("show_visualization", False)
         
+        # Process objects to add explicit location field
+        objects = detection_data.get("objects", [])
+        for obj in objects:
+            # Add location field with clear position information
+            if "position_description" in obj:
+                obj["location"] = obj["position_description"]
+            elif "center" in obj and len(obj["center"]) == 2:
+                # Calculate location as fallback if position_description is missing
+                center_x, center_y = obj["center"]
+                position_x = "left" if center_x < 0.33 else ("right" if center_x > 0.66 else "center")
+                position_y = "top" if center_y < 0.33 else ("bottom" if center_y > 0.66 else "middle")
+                obj["location"] = f"{position_y} {position_x}"
+        
         result = {
             "success": True,
             "count": detection_data.get("count", 0),
-            "objects": detection_data.get("objects", []),
+            "objects": objects,
             "analysis": react_result.get("answer", "detection completed"),
             "visualization_available": visualization_data.get("success", False),
             "synthesis_reviewed_visualization": react_result.get("reviewed_visualization", False),
@@ -612,9 +627,13 @@ Please provide your final medical assessment:"""
         # Nếu có phát hiện polyp, thêm chi tiết về polyp đầu tiên
         if detection_data and detection_data.get("count", 0) > 0 and "objects" in detection_data and len(detection_data["objects"]) > 0:
             first_polyp = detection_data["objects"][0]
+            # Get location from position_description or calculate it
+            location = first_polyp.get("location", first_polyp.get("position_description", "unknown"))
+            
             context_for_next["first_polyp"] = {
                 "confidence": first_polyp.get("confidence", 0),
                 "position": first_polyp.get("position_description", "unknown"),
+                "location": location,  # Add explicit location field
                 "size": {
                     "width": first_polyp.get("width", 0),
                     "height": first_polyp.get("height", 0),

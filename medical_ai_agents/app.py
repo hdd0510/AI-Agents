@@ -7,6 +7,9 @@ Medical AI Assistant
 Enhanced interactive chatbot with multi-modal capabilities.
 """
 
+import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+
 # ---- PATCH Pydantic ↔ Starlette Request -------------------------------------
 from starlette.requests import Request as _StarletteRequest
 from pydantic_core import core_schema
@@ -46,16 +49,6 @@ from medical_ai_agents import MedicalAISystem, MedicalGraphConfig
 from medical_ai_agents.memory.long_short_memory import LongShortTermMemory, MedicalAIChatbot
 
 os.environ['GRADIO_TEMP_DIR'] = '/tmp'
-
-# ---- PATCH Pydantic ↔ Starlette Request -------------------------------------
-from starlette.requests import Request as _StarletteRequest
-from pydantic_core import core_schema
-
-def _any_schema(*_):        # chấp mọi số đối số
-    return core_schema.any_schema()
-
-_StarletteRequest.__get_pydantic_core_schema__ = classmethod(_any_schema)
-# -----------------------------------------------------------------------------
 
 class MedicalAIConfig:
     """Cấu hình cho Medical AI Chatbot."""
@@ -148,6 +141,8 @@ class MedicalAIConfig:
                 return default
         return value
 
+
+
 def create_enhanced_chatbot():
     """Create an enhanced chatbot with a more visually appealing interface."""
     import gradio as gr
@@ -170,6 +165,153 @@ def create_enhanced_chatbot():
             self.memory = LongShortTermMemory()
             self.medical_ai = self._initialize_medical_ai()
 
+        def _initialize_medical_ai(self) -> MedicalAISystem:
+            """Khởi tạo hệ thống Medical AI với cấu hình đã cập nhật."""
+            
+            # Tạo cấu hình cho hệ thống
+            medical_config = MedicalGraphConfig(
+                device=self.app_config.get("medical_ai.device", "cuda"),
+                detector_model_path=self.app_config.get("medical_ai.detector_model_path", "medical_ai_agents/weights/detect_best.pt"),
+                vqa_model_path=self.app_config.get("medical_ai.vqa_model_path", "medical_ai_agents/weights/llava-med-mistral-v1.5-7b"),
+                modality_classifier_path=self.app_config.get("medical_ai.modality_classifier_path", "medical_ai_agents/weights/modal_best.pt"),
+                region_classifier_path=self.app_config.get("medical_ai.region_classifier_path", "medical_ai_agents/weights/location_best.pt"),
+                
+                # Thêm cấu hình RAG
+                rag_storage_path=self.app_config.get("medical_ai.rag_storage_path", "./rag_storage"),
+                
+                # Thông số LLM
+                llm_model=self.app_config.get("medical_ai.llm_model", "gpt-4o-mini"),
+                llm_temperature=self.app_config.get("medical_ai.llm_temperature", 0.2),
+                
+                # Checkpointing (tùy chọn)
+                checkpoint_dir=self.app_config.get("medical_ai.checkpoint_dir", "sessions")
+            )
+            
+            # Khởi tạo hệ thống
+            system = MedicalAISystem(config=medical_config)
+            
+            # Log để xác nhận
+            logger = logging.getLogger(__name__)
+            logger.info("Initialized Medical AI System with updated pipeline router")
+            logger.info(f"RAG storage path: {medical_config.rag_storage_path}")
+            
+            return system
+
+        # ---------------------------------------------------------------------
+        # 8) ***XỬ LÝ UPLOAD TÀI LIỆU (giữ nguyên logic cũ)***
+        # ---------------------------------------------------------------------
+        def process_document_upload(self, files, session_state):
+            """
+            Nhận danh sách 'files' (Gradio File component), thêm vào hệ thống RAG,
+            cập nhật session_state và trả về session_state đã cập nhật.
+            """
+            import logging, uuid, os
+            logger = logging.getLogger(__name__)
+            logger.info(f"Processing {len(files) if files else 0} uploaded documents")
+
+            if not files:                           # Không có file → giữ nguyên state
+                return session_state
+
+            # --- Lấy (hoặc tạo) session_id ------------------------------------
+            session_id = self._get_session_value(session_state, "session_id")
+            if not session_id:
+                session_id = str(uuid.uuid4())
+                session_state = self._update_session_state(session_state, {
+                    "session_id": session_id
+                })
+                logger.info(f"Created new session ID for document upload: {session_id}")
+
+            # --- Lưu đường dẫn file ------------------------------------------
+            file_paths = []
+            for file in files:
+                try:
+                    file_path = file.name if hasattr(file, "name") else str(file)
+                    logger.info(f"Document ready: {os.path.basename(file_path)}")
+                    file_paths.append(file_path)
+                except Exception as e:
+                    logger.error(f"Error processing file: {e}")
+
+            session_state = self._update_session_state(session_state, {
+                "uploaded_documents": file_paths
+            })
+
+            # --- Đưa tài liệu vào RAG ----------------------------------------
+            try:
+                if not hasattr(self, "rag_agent"):
+                    from medical_ai_agents.agents.rag import RAGAgent
+                    self.rag_agent = RAGAgent()
+
+                # KIỂM TRA: Xem vector database đã tồn tại và có tài liệu chưa
+                has_existing_docs = self.rag_agent.has_documents()
+                logger.info(f"Checking existing documents in vector database: {has_existing_docs}")
+
+                # EMBEDDING: Xử lý các tài liệu mới
+                result = self.rag_agent.add_documents(file_paths)
+
+                if result.get("success"):
+                    processed_files = result.get("processed_files", [])
+                    processed_count = len(processed_files)
+                    
+                    logger.info(f"Successfully processed {processed_count} documents")
+                    
+                    # Thêm thông tin embedding vào state
+                    session_state = self._update_session_state(session_state, {
+                        "document_processing_result": result,
+                        "embedding_result": {
+                            "success": True,
+                            "documents_processed": processed_files,
+                            "message": f"Successfully processed {processed_count} documents",
+                            "timestamp": time.time(),
+                            "has_existing_documents": True
+                        }
+                    })
+                    
+                    # Đảm bảo document_qa được thêm vào required_tasks nếu chưa có
+                    required_tasks = self._get_session_value(session_state, "required_tasks", [])
+                    if "document_qa" not in required_tasks:
+                        required_tasks.append("document_qa")
+                        session_state = self._update_session_state(session_state, {
+                            "required_tasks": required_tasks
+                        })
+                        
+                    # Thêm vào execution_order nếu chưa có
+                    execution_order = self._get_session_value(session_state, "execution_order", [])
+                    if "document_qa" not in execution_order:
+                        execution_order.append("document_qa")
+                        session_state = self._update_session_state(session_state, {
+                            "execution_order": execution_order
+                        })
+                        
+                    # Đặt document_qa làm current_task để đảm bảo nó được ưu tiên
+                    session_state = self._update_session_state(session_state, {
+                        "current_task": "document_qa"
+                    })
+                    
+                    logger.info("Document embedding completed successfully, RAG is ready")
+                else:
+                    logger.error(f"Document processing failed: {result.get('error', 'unknown')}")
+                    session_state = self._update_session_state(session_state, {
+                        "document_processing_result": result,
+                        "embedding_result": {
+                            "success": False,
+                            "error": result.get("error", "Failed to embed documents"),
+                            "message": "Failed to embed documents"
+                        }
+                    })
+            except Exception as e:
+                logger.error(f"Error in document processing: {e}")
+                session_state = self._update_session_state(session_state, {
+                    "document_processing_error": str(e),
+                    "embedding_result": {
+                        "success": False,
+                        "error": f"Error in document processing: {e}",
+                        "message": f"Error during document embedding: {str(e)}"
+                    }
+                })
+
+            return session_state
+
+
         
         def _sync_ui_history_with_conversation(self, history, conversation_history):
             """Đồng bộ hóa history UI với conversation_history để đảm bảo chúng khớp nhau."""
@@ -187,6 +329,10 @@ def create_enhanced_chatbot():
             
             # Thêm các tin nhắn từ conversation_history vào UI history nếu chưa có
             for entry in conversation_history:
+                # Chỉ xử lý các phần tử là dictionary
+                if not isinstance(entry, dict):
+                    continue
+                    
                 query = entry.get("query")
                 response = entry.get("response")
                 
@@ -197,428 +343,13 @@ def create_enhanced_chatbot():
             
             return new_history
 
-        def create_enhanced_interface(self):
-            """Create an enhanced user interface for the chatbot."""
-            import gradio as gr
-            
-            # Configuration
-            theme = self.app_config.get("ui.theme", "soft")
-            chat_height = self.app_config.get("ui.chat_height", 500)
-            
-            # Create interface with enhanced styling
-            with gr.Blocks(theme=theme, title=self.app_config.get("app.title", "Medical AI Assistant")) as interface:
-                # Header
-                with gr.Row():
-                    gr.HTML("""
-                    <div style="text-align: center; margin-bottom: 5px; display:flex; align-items:center; justify-content:center; gap:10px;">
-                        <h1 style="margin: 10px 0;">🩺 Medical AI Assistant</h1>
-                    </div>
-                    <p style="text-align: center; margin-bottom: 10px; color: #666;">
-                        The AI-powered system for medical image analysis and consultation
-                    </p>
-                    """)
-                
-                # Username input (for session persistence)
-                with gr.Row():
-                    username = gr.Textbox(
-                        label="Username (optional, for session persistence)",
-                        placeholder="Enter username to maintain your chat history",
-                        value="default_user"
-                    )
-                
-                # Main chatbot interface
-                with gr.Row():
-                    chatbot = gr.Chatbot(
-                        height=chat_height,
-                        show_copy_button=True,
-                        render=True
-                    )
-                    
-                # Input components
-                with gr.Row():
-                    with gr.Column(scale=4):
-                        with gr.Row():
-                            msg = gr.Textbox(
-                                show_label=False,
-                                placeholder="Nhập câu hỏi về hình ảnh y tế hoặc hỏi tôi về các vấn đề y khoa...",
-                                container=False,
-                                scale=5
-                            )
-                            # Thêm nút đính kèm tài liệu
-                            attach_btn = gr.Button("📎", size="sm", scale=1)
-                    
-                    # Vùng upload tài liệu (ẩn ban đầu)
-                    doc_upload = gr.File(
-                        label="📄 Đính kèm tài liệu (PDF, DOCX, TXT)",
-                        file_types=["pdf", "docx", "txt"],
-                        visible=False,
-                        elem_id="document_upload"
-                    )
-                    
-                    with gr.Column(scale=1, min_width=100):
-                        with gr.Row():
-                            image = gr.UploadButton(
-                                "📷 Ảnh nội soi",
-                                file_types=["image"],
-                                type="filepath"
-                            )
-                        with gr.Row():
-                            # Hiển thị trạng thái ảnh - đổi thành gr.Markdown và bỏ tham số scale
-                            image_status = gr.Markdown(
-                                "**Chưa có ảnh**"
-                            )
-                            # Nút xóa ảnh riêng biệt
-                            clear_img_btn = gr.Button("❌ Xóa", size="sm", scale=1)
-                    
-                    with gr.Column(scale=1, min_width=100):
-                        submit = gr.Button("Submit", variant="primary")
-                
-                # State for session management
-                session_state = gr.State({})
-                # Thêm state riêng để theo dõi ảnh hiện tại
-                image_state = gr.State(None)
-                
-                # Auto-sync function to load history when interface is first loaded
-                def auto_sync_history(username):
-                    # Khởi tạo session_state mới
-                    new_state = {}
-                    
-                    # Thử tải session ID từ persistent storage
-                    session_id = self._load_persistent_session_id(username)
-                    if session_id:
-                        new_state["session_id"] = session_id
-                        logger.info(f"Auto-sync: Loaded session_id {session_id} for {username}")
-                        
-                        # Tạo user ID từ username
-                        user_id = self.generate_user_id(username)
-                        new_state["user_id"] = user_id
-                        
-                        # CRITICAL FIX: Tải conversation_history và đảm bảo nó được lưu vào session state
-                        conversation_history = self._load_conversation_history(session_id)
-                        if conversation_history:
-                            new_state["conversation_history"] = conversation_history
-                            logger.info(f"Auto-sync: Loaded {len(conversation_history)} entries to conversation_history")
-                            
-                            # Tải lịch sử UI
-                            ui_history = self.load_previous_session(username, session_id)
-                            if not ui_history:
-                                # Nếu không có UI history, tạo từ conversation_history
-                                ui_history = []
-                                for entry in conversation_history:
-                                    query = entry.get("query")
-                                    response = entry.get("response")
-                                    if query and response:
-                                        ui_history.append([query, response])
-                                logger.info(f"Auto-sync: Created {len(ui_history)} UI history entries from conversation_history")
-                            
-                            # CRITICAL FIX: Ghi log để kiểm tra conversation_history đã được load
-                            logger.info(f"Auto-sync: Memory setup complete. Session has conversation_history with {len(conversation_history)} entries")
-                            
-                            return ui_history, new_state
-                    
-                    # Nếu không tìm thấy session hoặc history
-                    return [], new_state
-                
-                # Function to update image status với màu sắc tương phản rõ ràng
-                def update_image_status(image_path, current_state):
-                    # Lưu đường dẫn ảnh vào state
-                    new_state = image_path
-                    
-                    if image_path:
-                        file_name = os.path.basename(image_path)
-                        # Dùng markdown với màu chữ đậm, dễ nhìn
-                        return f"**✅ Đã tải: <span style='color: #2c7a4e; background: #e3f5ed; padding: 2px 5px; border-radius: 3px;'>{file_name}</span>**", new_state
-                    return "**Chưa có ảnh**", None
-
-                # Xử lý sự kiện xóa ảnh
-                def clear_image(current_state):
-                    # Reset cả image và state
-                    return None, "**Chưa có ảnh**", None
-                
-                # Kết nối events
-                image.upload(
-                    fn=update_image_status,
-                    inputs=[image, image_state],
-                    outputs=[image_status, image_state],
-                    queue=False
-                )
-                
-                clear_img_btn.click(
-                    fn=clear_image,
-                    inputs=[image_state],
-                    outputs=[image, image_status, image_state]
-                )
-                
-                # Handle document upload visibility toggle
-                def toggle_doc_upload(visible):
-                    return gr.update(visible=not visible)
-                
-                attach_btn.click(
-                    fn=toggle_doc_upload,
-                    inputs=[doc_upload],
-                    outputs=[doc_upload]
-                )
-                
-                # Handle document upload status
-                def update_doc_status(file):
-                    if file:
-                        return f"📄 Đã đính kèm: {file.name}"
-                    return ""
-                
-                doc_upload.change(
-                    fn=update_doc_status,
-                    inputs=[doc_upload],
-                    outputs=[msg]
-                )
-                
-                # Events
-                submit.click(
-                    fn=self.process_message_streaming,
-                    inputs=[msg, image, chatbot, username, session_state],
-                    outputs=[msg, chatbot, session_state],
-                    queue=True
-                )
-                msg.submit(
-                    fn=self.process_message_streaming,
-                    inputs=[msg, image, chatbot, username, session_state],
-                    outputs=[msg, chatbot, session_state],
-                    queue=True
-                )
-                
-                # Auto-sync on page load
-                interface.load(
-                    fn=auto_sync_history,
-                    inputs=[username],
-                    outputs=[chatbot, session_state]
-                )
-                
-                # Clear button
-                with gr.Row():
-                    # Fix: Thêm session_state vào danh sách để clear
-                    clear_btn = gr.ClearButton([msg, chatbot, image, image_status, image_state], value="Clear Chat")
-                    
-                    # Thêm nút để đồng bộ hóa lịch sử
-                    sync_history_btn = gr.Button("🔄 Sync History", variant="secondary")
-                
-                # Cập nhật hàm clear_handler để xử lý image_state
-                def clear_handler():
-                    # Xóa dữ liệu session_state, conversation_history và file lịch sử nếu có
-                    try:
-                        session_id = self._get_session_value(session_state, "session_id")
-                        username_val = username.value if hasattr(username, 'value') else None
-                        user_id = self._get_session_value(session_state, "user_id")
-                        
-                        # Xóa conversation_history trong session_state và tạo session mới
-                        # Thay vì truy cập trực tiếp, sử dụng _update_session_state
-                        new_session_id = str(uuid.uuid4())
-                        session_state = self._update_session_state(session_state, {
-                            "session_id": new_session_id,
-                            "conversation_history": [],
-                            "user_id": user_id  # Giữ nguyên user_id
-                        })
-                        logger.info(f"Created new session ID: {new_session_id}")
-                        
-                        # Xóa file history nếu có session_id cũ
-                        if session_id:
-                            import os
-                            import shutil
-                            
-                            # Xóa file history UI
-                            history_file = os.path.join("sessions", "history", f"{session_id}.json")
-                            if os.path.exists(history_file):
-                                try:
-                                    os.remove(history_file)
-                                    logger.info(f"Removed history file: {history_file}")
-                                except Exception as e:
-                                    logger.error(f"Failed to remove history file: {e}")
-                                    
-                            # Xóa file conversation_history
-                            conv_file = os.path.join("sessions", "conversation_history", f"{session_id}.json")
-                            if os.path.exists(conv_file):
-                                try:
-                                    os.remove(conv_file)
-                                    logger.info(f"Removed conversation history file: {conv_file}")
-                                except Exception as e:
-                                    logger.error(f"Failed to remove conversation history file: {e}")
-                            
-                            # Xóa persistent session ID
-                            if username_val:
-                                persistent_file = os.path.join("sessions", f"{username_val}.session")
-                                if os.path.exists(persistent_file):
-                                    try:
-                                        os.remove(persistent_file)
-                                        logger.info(f"Removed persistent session file: {persistent_file}")
-                                    except Exception as e:
-                                        logger.error(f"Failed to remove persistent session file: {e}")
-                                
-                                # Xóa file persistent session trong thư mục data
-                                if hasattr(self, "_get_persistent_session_path"):
-                                    persistent_path = self._get_persistent_session_path(username_val)
-                                    if os.path.exists(persistent_path):
-                                        try:
-                                            os.remove(persistent_path)
-                                            logger.info(f"Removed persistent session path: {persistent_path}")
-                                        except Exception as e:
-                                            logger.error(f"Failed to remove persistent session path: {e}")
-                            
-                            # Xóa dữ liệu trong bộ nhớ
-                            if hasattr(self, "memory"):
-                                try:
-                                    # Xóa short-term memory
-                                    if hasattr(self.memory, "clear_short_term") and session_id:
-                                        self.memory.clear_short_term(session_id)
-                                        logger.info(f"Cleared short-term memory for session: {session_id}")
-                                    
-                                    # Xóa long-term memory cho user này
-                                    if hasattr(self.memory, "clear_long_term") and user_id:
-                                        self.memory.clear_long_term(user_id, session_id)
-                                        logger.info(f"Cleared long-term memory for user: {user_id}")
-                                except Exception as e:
-                                    logger.error(f"Error clearing memory: {e}")
-                            
-                    except Exception as e:
-                        logger.error(f"Error clearing chat data: {e}")
-                        # Tạo session mới ngay cả khi có lỗi
-                        session_state = self._update_session_state(session_state, {
-                            "session_id": str(uuid.uuid4()),
-                            "conversation_history": []
-                        })
-                    
-                    # Thêm debug log
-                    logger.info("Clear chat triggered - reset completed, all data cleared")
-                    
-                    # Trả về empty session và UI elements
-                    return session_state, "", [], None, "**Chưa có ảnh**", None
-                
-                # Kết nối nút clear với hàm xử lý
-                clear_btn.click(
-                    fn=clear_handler,
-                    inputs=[],
-                    outputs=[session_state, msg, chatbot, image, image_status, image_state]
-                )
-                
-                # CRITICAL FIX: Thêm log để giúp debug conversation_history
-                def debug_conversation_history(session_state):
-                    """Debug conversation history state"""
-                    try:
-                        if not session_state:
-                            logger.info(f"DEBUG: session_state is empty or None")
-                            return "No session state."
-                            
-                        session_id = session_state.get("session_id", "No session ID")
-                        conversation_history = session_state.get("conversation_history", [])
-                        
-                        logger.info(f"DEBUG: Session {session_id} has conversation_history with {len(conversation_history)} entries")
-                        
-                        if conversation_history and len(conversation_history) > 0:
-                            last_entry = conversation_history[-1]
-                            logger.info(f"DEBUG: Last entry query: {last_entry.get('query', 'None')[:30]}...")
-                            
-                        return f"Session {session_id} has {len(conversation_history)} conversation entries."
-                    except Exception as e:
-                        logger.error(f"Error in debug_conversation_history: {str(e)}")
-                        return "Error debugging conversation history."
-                
-                # Xử lý sự kiện đồng bộ hóa lịch sử - FIXED
-                def sync_history_handler(history, username, session_state):
-                    # Lấy session_id từ session_state hoặc từ persistent storage
-                    session_id = self._get_session_value(session_state, "session_id")
-                    if not session_id:
-                        session_id = self._load_persistent_session_id(username)
-                        if session_id:
-                            session_state = self._update_session_state(session_state, {
-                                "session_id": session_id
-                            })
-                    
-                    # Nếu không có session_id, không thể đồng bộ
-                    if not session_id:
-                        return history, session_state
-                    
-                    # CRITICAL FIX: Tải conversation_history từ file và đảm bảo nó được lưu vào session_state
-                    conversation_history = self._load_conversation_history(session_id)
-                    if not conversation_history:
-                        logger.warning(f"No conversation history found for session {session_id}")
-                        return history, session_state
-                    
-                    # CRITICAL FIX: Cập nhật session_state với conversation_history mới
-                    session_state = self._update_session_state(session_state, {
-                        "conversation_history": conversation_history
-                    })
-                    logger.info(f"FIXED: Loaded and updated conversation_history with {len(conversation_history)} entries")
-                    
-                    # CRITICAL FIX: Hiển thị thông tin bổ sung để debug
-                    if conversation_history and len(conversation_history) > 0:
-                        last_entry = conversation_history[-1]
-                        logger.info(f"Last conversation entry query: {last_entry.get('query', 'None')[:30]}...")
-                        resp = last_entry.get('response', 'None')
-                        resp_preview = resp[:30] + "..." if resp and len(resp) > 30 else resp
-                        logger.info(f"Last conversation entry response: {resp_preview}")
-                    
-                    # Đồng bộ hóa history UI với conversation_history
-                    synced_history = self._sync_ui_history_with_conversation(history, conversation_history)
-                    
-                    # Log kết quả
-                    logger.info(f"Synced UI history: {len(history)} -> {len(synced_history)} messages")
-                    
-                    return synced_history, session_state
-                
-                # Kết nối nút đồng bộ với hàm xử lý
-                sync_history_btn.click(
-                    fn=sync_history_handler,
-                    inputs=[chatbot, username, session_state],
-                    outputs=[chatbot, session_state]
-                )
-                    
-                # Footer
-                with gr.Row():
-                    gr.HTML("""
-                    <div style="text-align:center; margin-top:10px; padding: 5px; color: #666">
-                        <p>Medical AI Assistant | Created by Medical AI Team | Version 1.0.0</p>
-                    </div>
-                    """)
-                    
-            return interface
-            
-        def _load_persistent_session_id(self, username: str) -> str:
-            """Tải session ID đã lưu trữ nếu có."""
-            session_file = self._get_persistent_session_path(username)
-            try:
-                if os.path.exists(session_file):
-                    with open(session_file, 'r') as f:
-                        saved_session_id = f.read().strip()
-                        if saved_session_id:
-                            logger.info(f"Loaded persistent session ID for {username}: {saved_session_id}")
-                            return saved_session_id
-            except Exception as e:
-                logger.error(f"Error loading persistent session ID: {str(e)}")
-            return None
-            
-        def _save_persistent_session_id(self, username: str, session_id: str) -> bool:
-            """Lưu session ID cho lần sử dụng tiếp theo."""
-            session_file = self._get_persistent_session_path(username)
-            try:
-                with open(session_file, 'w') as f:
-                    f.write(session_id)
-                logger.info(f"Saved persistent session ID for {username}: {session_id}")
-                return True
-            except Exception as e:
-                logger.error(f"Error saving persistent session ID: {str(e)}")
-                return False
-
-        def _initialize_medical_ai(self):
-            """Khởi tạo Medical AI system."""
-            device = self.app_config.get("medical_ai.device", "cpu")
-            logger.info(f"Initializing Medical AI with device: {device}")
-            
-            # Chỉ truyền tham số device để tương thích với cả 2 phiên bản của MedicalGraphConfig
-            return MedicalAISystem(MedicalGraphConfig(device=device))
-        
         def _save_image_to_temp(self, image) -> str:
             """Lưu ảnh vào thư mục tạm."""
             import tempfile
             import os
             from PIL import Image
             import io
+            import numpy as np
             
             if not image:
                 logger.error("No image provided")
@@ -629,10 +360,16 @@ def create_enhanced_chatbot():
                 if isinstance(image, str) and os.path.isfile(image):
                     return image
                 
+                # Handle PIL Image objects directly from Gradio
+                if hasattr(image, "__class__") and "PIL" in str(image.__class__):
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
+                        image.save(tmp.name, format='JPEG')
+                        return tmp.name
+                
                 # Xử lý cho trường hợp image là numpy array (từ Gradio)
-                if hasattr(image, 'shape') and len(getattr(image, 'shape', [])) == 3:
+                if isinstance(image, np.ndarray) or (hasattr(image, 'shape') and len(getattr(image, 'shape', [])) == 3):
                     # Đây là numpy array
-                    img = Image.fromarray(image)
+                    img = Image.fromarray(image.astype(np.uint8) if hasattr(image, 'astype') else image)
                     with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
                         img.save(tmp.name, format='JPEG')
                         return tmp.name
@@ -648,802 +385,658 @@ def create_enhanced_chatbot():
                     except Exception as e:
                         logger.warning(f"Could not process image bytes: {str(e)}")
                 
+                # Handle case where image has a name attribute (file-like object)
+                if hasattr(image, "name") and os.path.isfile(image.name):
+                    return image.name
+                
                 # Fallback: Lưu trực tiếp
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
-                    tmp.write(image if isinstance(image, bytes) else str(image).encode('utf-8'))
+                    if hasattr(image, "save"):
+                        image.save(tmp.name)
+                    else:
+                        tmp.write(image if isinstance(image, bytes) else str(image).encode('utf-8'))
                     return tmp.name
             except Exception as e:
                 logger.error(f"Error saving image to temp: {str(e)}")
                 return None
         
-        def _save_visualization(self, base64_data: str, filename: str) -> str:
-            """Save visualization image from base64 data."""
+        def _save_visualization_to_file(self, base64_data: str, session_id: str) -> str:
+            """Lưu dữ liệu base64 vào file ảnh và trả về đường dẫn tương đối."""
             import os
             import base64
+            import time
             
-            # Create visualizations dir if doesn't exist
-            viz_dir = os.path.join(os.path.dirname(__file__), '..', 'visualizations')
+            # Đảm bảo base64_data không chứa phần header của data URL
+            if base64_data and "," in base64_data:
+                base64_data = base64_data.split(",", 1)[1]
+                
+            # Tạo thư mục nếu chưa tồn tại
+            viz_dir = os.path.join("visualizations", session_id)
             os.makedirs(viz_dir, exist_ok=True)
             
-            # Save image
-            viz_path = os.path.join(viz_dir, filename)
+            # Tạo tên file duy nhất
+            filename = f"detect_{int(time.time())}.png"
+            file_path = os.path.join(viz_dir, filename)
+            
             try:
-                if base64_data.startswith('data:image'):
-                    # Extract base64 data
-                    header, encoded = base64_data.split(",", 1)
-                    data = base64.b64decode(encoded)
-                else:
-                    # Assume it's already base64 encoded
-                    data = base64.b64decode(base64_data)
-                    
-                with open(viz_path, "wb") as f:
-                    f.write(data)
-                    
-                return viz_path
+                # Giải mã và lưu file
+                img_data = base64.b64decode(base64_data)
+                with open(file_path, "wb") as f:
+                    f.write(img_data)
+                
+                # Log để debug
+                logger.info(f"Saved visualization to file: {file_path}")
+                logger.info(f"File exists: {os.path.exists(file_path)}")
+                logger.info(f"File size: {os.path.getsize(file_path) if os.path.exists(file_path) else 'N/A'}")
+                
+                # Trả về đường dẫn tương đối
+                return file_path
             except Exception as e:
-                logger.error(f"Error saving visualization: {str(e)}")
+                logger.error(f"Error saving visualization to file: {e}")
                 return ""
-        
+                
+        def _ensure_history_format(self, history):
+            """Đảm bảo history luôn ở định dạng list of dictionaries."""
+            if not history or len(history) == 0:
+                return []
+                
+            # Nếu đã là list of dicts thì return ngay
+            if isinstance(history[0], dict):
+                return history
+                
+            # Nếu là list of lists (UI history), chuyển đổi sang format dictionary
+            if isinstance(history[0], list):
+                formatted_history = []
+                for item in history:
+                    if len(item) >= 2:
+                        formatted_history.append({
+                            "query": item[0],
+                            "response": item[1],
+                            "has_image": False,  # Mặc định
+                            "timestamp": time.time()
+                        })
+                return formatted_history
+                
+            # Trường hợp không xác định, trả về list rỗng an toàn
+            return []
+
         def process_message_streaming(self, message, image, history, username, session_state):
-            """FIXED streaming version - properly preserve query in conversation history."""
-            import uuid
-            import os
-            
-            # 1. CRITICAL FIX: Store original message early 
-            original_message = message.strip() if message else ""
-            if not original_message:
+            """
+            Streaming handler: nhận `message` (str), `image` (PIL/np/file-path hoặc None),
+            cập nhật `history` (UI) và `session_state`, trả về ba giá trị (msg_out, history, state)
+            dưới dạng generator cho Gradio.
+            """
+            import time, uuid, os, re, logging
+            logger = logging.getLogger(__name__)
+
+            # ----- 0. Tiền xử lý --------------------------------------------------------
+            query = (message or "").strip()
+            if not query:
                 return "", history, session_state
-            
-            logger.info(f"[DEBUG] Processing message: '{original_message[:50]}...'")
-            
-            # Generate session ID với persistent storage
-            # session_id = session_state.get("session_id")  # ❌ Lỗi: 'State' object has no attribute 'get'
-            
-            # Sửa lại cách truy cập session_state
-            if isinstance(session_state, dict):
-                session_id = session_state.get("session_id")
-            else:
-                # Nếu session_state là đối tượng Gradio State, không phải dict
-                try:
-                    session_id = session_state["session_id"] if "session_id" in session_state else None
-                except (TypeError, KeyError):
-                    session_id = None
-                    
-            logger.info(f"[SESSION] Current session state: {type(session_state)}")
+
+            # ----- 1. Quản lý session ---------------------------------------------------
+            sid = self._get_session_value(session_state, "session_id")
+            if not sid:
+                sid = self._load_persistent_session_id(username) or str(uuid.uuid4())
+                session_state = self._update_session_state(session_state, {"session_id": sid})
+                self._save_persistent_session_id(username, sid)
+
+            uid = self.generate_user_id(username)
+            session_state = self._update_session_state(session_state, {"user_id": uid})
+
+            # ----- 2. Khôi phục lịch sử nếu cần ----------------------------------------
+            if not self._get_session_value(session_state, "conversation_history"):
+                conv_hist = self._load_conversation_history(sid)
+                session_state = self._update_session_state(session_state, {
+                    "conversation_history": conv_hist or []
+                })
+
+            # ----- 3. Thêm placeholder vào UI ------------------------------------------
+            history.append([query, "⏳ Đang xử lý..."])
+            yield "", history, session_state
+
+            # ----- 4. Lấy ngữ cảnh bộ nhớ ngắn hạn -------------------------------------
+            context_prompt = self.memory.get_contextual_prompt(sid, uid)
+
+            # ----- 5. Phân nhánh ảnh / text --------------------------------------------
             try:
-                logger.info(f"[SESSION] Current session state keys: {list(session_state.keys() if hasattr(session_state, 'keys') else [])}")
-            except:
-                logger.info(f"[SESSION] Session state doesn't support keys()")
-            logger.info(f"[SESSION] Current session_id from state: {session_id}")
-            
-            # Flag để kiểm tra nếu session được phục hồi
-            is_restored_session = False
-            
-            if not session_id:
-                # Thử tải session ID từ persistent storage
-                session_id = self._load_persistent_session_id(username)
-                if session_id:
-                    is_restored_session = True
-            
-            # Nếu vẫn chưa có session ID, tạo mới
-            if not session_id:
-                session_id = str(uuid.uuid4())
-                logger.info(f"Created new session ID: {session_id}")
+                # Đảm bảo conversation_history có định dạng đúng trước khi truyền vào analyze
+                conv_history = self._ensure_history_format(
+                    self._get_session_value(session_state, "conversation_history", [])
+                )
                 
-                # Lưu session ID mới vào persistent storage
-                self._save_persistent_session_id(username, session_id)
-            else:
-                logger.info(f"Reusing existing session ID: {session_id}")
-            
-            # Tạo user ID từ username
-            user_id = self.generate_user_id(username)
-            
-            # Cập nhật session_state - Sửa lỗi với State object
-            # session_state["session_id"] = session_id
-            # session_state["user_id"] = user_id
-            
-            # Thay vì gán trực tiếp, sử dụng phương thức cập nhật an toàn
-            session_state = self._update_session_state(session_state, {
-                "session_id": session_id,
-                "user_id": user_id
-            })
-            
-            # FIX: Luôn load lịch sử nếu là session được phục hồi, không chỉ khi history trống
-            if is_restored_session:
-                logger.info(f"Loading history from restored session: {session_id}")
-                old_history = self.load_previous_session(username, session_id)
-                
-                # Sửa lại cách truy cập session_state để kiểm tra conversation_history
-                has_conversation_history = False
-                if isinstance(session_state, dict):
-                    has_conversation_history = "conversation_history" in session_state and session_state["conversation_history"]
-                else:
-                    try:
-                        has_conversation_history = "conversation_history" in session_state and session_state["conversation_history"]
-                    except (TypeError, KeyError):
-                        has_conversation_history = False
-                
-                if not has_conversation_history:
-                    conversation_history = self._load_conversation_history(session_id)
-                    if conversation_history:
-                        logger.info(f"[FIX] Manually loaded {len(conversation_history)} entries to conversation_history")
-                        # session_state["conversation_history"] = conversation_history  # Lỗi với State object
-                        session_state = self._update_session_state(session_state, {
-                            "conversation_history": conversation_history
-                        })
-                    else:
-                        # Khởi tạo mới nếu không tìm thấy
-                        logger.info(f"[FIX] Initializing new conversation_history for session {session_id}")
-                        # session_state["conversation_history"] = []  # Lỗi với State object
-                        session_state = self._update_session_state(session_state, {
-                            "conversation_history": []
-                        })
-                
-                # Khôi phục phần xử lý old_history
-                if old_history:
-                    # FIX: Chỉ thay thế history nếu nó trống hoặc không có tin nhắn nào
-                    if not history or len(history) == 0:
-                        history = old_history
-                    else:
-                        # FIX: Nếu đã có history, kiểm tra xem có trùng lặp không
-                        # và chỉ thêm các tin nhắn không trùng lặp
-                        existing_messages = set()
-                        for msg_pair in history:
-                            if len(msg_pair) >= 2:
-                                existing_messages.add(msg_pair[0])
-                        
-                        # Thêm các tin nhắn cũ không trùng lặp
-                        for old_msg_pair in old_history:
-                            if len(old_msg_pair) >= 2 and old_msg_pair[0] not in existing_messages:
-                                history.insert(0, old_msg_pair)  # Thêm vào đầu để giữ thứ tự thời gian
-                                existing_messages.add(old_msg_pair[0])
-                    
-                    yield "", history, session_state
-                    logger.info(f"Loaded {len(old_history)} messages from old session")
-            
-            # Start with user message - FIXED: preserve original message
-            history.append([original_message, "🤔 Analyzing..."])  # Use original_message
-            yield "", history, session_state  # Return empty string to clear input
-            
-            try:
-                # Get contextual information
-                context = self.memory.get_contextual_prompt(session_id, user_id)
-                
-                # IMPORTANT: Save session_id in both global state and temporary result
-                # This ensures the session_id persists through the entire process
-                session_state["session_id"] = session_id
-                
-                # FIX: Đảm bảo conversation_history được khởi tạo đúng cách
-                has_conversation_history = False
-                if isinstance(session_state, dict):
-                    has_conversation_history = "conversation_history" in session_state and session_state["conversation_history"]
-                else:
-                    try:
-                        has_conversation_history = "conversation_history" in session_state and session_state["conversation_history"]
-                    except (TypeError, KeyError):
-                        has_conversation_history = False
-                    
-                if not has_conversation_history:
-                    # Thử load lại từ file nếu chưa có
-                    conversation_history = self._load_conversation_history(session_id)
-                    if conversation_history:
-                        logger.info(f"[FIX] Manually loaded {len(conversation_history)} entries to conversation_history")
-                        # session_state["conversation_history"] = conversation_history  # Lỗi với State object
-                        session_state = self._update_session_state(session_state, {
-                            "conversation_history": conversation_history
-                        })
-                    else:
-                        # Khởi tạo mới nếu không tìm thấy
-                        logger.info(f"[FIX] Initializing new conversation_history for session {session_id}")
-                        # session_state["conversation_history"] = []  # Lỗi với State object
-                        session_state = self._update_session_state(session_state, {
-                            "conversation_history": []
-                        })
-                
-                # Determine processing mode
-                has_image = image is not None
-                
-                if has_image:
-                    # =============  IMAGE WORKFLOW =============
-                    logger.info(f"Processing image with query: '{original_message[:50]}...'")
-                    
-                    # Save image to temp file
-                    image_path = self._save_image_to_temp(image)
-                    
-                    # Update status during processing
-                    history[-1][1] = "🔍 Analyzing image..."
-                    yield "", history, session_state
-                    time.sleep(0.3)
-                    
-                    # 2. CRITICAL FIX: Pass original_message to analyze, not the cleared message
-                    result = self.medical_ai.analyze(
-                        image_path=image_path,
-                        query=original_message,  # <-- Use original_message here
-                        medical_context={
-                            "user_context": context
-                        } if context else None,
-                        conversation_history=self._get_session_value(session_state, "conversation_history", []),  # CRITICAL: Pass conversation history
-                        session_id=session_id  # CRITICAL: Pass session_id explicitly
-                    )
-                    
-                    logger.debug(f"Image analysis result: success={result.get('success', False)}")
-                    
-                    if result.get("success", False):
-                        # Build response (existing code...)
-                        response_parts = []
-                        
-                        # Handle polyp detection if available
-                        if "agent_results" in result and "detector" in result.get("agent_results", {}):
-                            detector = result["agent_results"]["detector"]
-                            
-                            if detector.get("success", False) and detector.get("count", 0) > 0:
-                                # Display entry 0 response first but REMOVE Medical AI Assessment prefix if exists
-                                if "response" in result and isinstance(result["response"], list) and len(result["response"]) > 0:
-                                    response_text = result['response'][0]
-                                    # Kiểm tra và loại bỏ tiêu đề Medical AI Assessment nếu có
-                                    if response_text.startswith("Medical AI Assessment:"):
-                                        response_text = response_text.replace("Medical AI Assessment:", "").strip()
-                                    response_parts.append(f"💬 **{response_text}**\n")
-                                
-                                # Lưu thông tin visualization (nhưng chưa hiển thị)
-                                if detector.get("visualization_base64"):
-                                    viz_base64 = detector["visualization_base64"]
-                                    viz_filename = f"polyp_viz_{session_state.get('session_id', 'unknown')}_{int(time.time())}.png"
-                                    viz_path = self._save_visualization(viz_base64, viz_filename)
-                                    
-                                    # FIXED: Lưu cả path và base64 data
-                                    # session_state["last_visualization"] = viz_path
-                                    # session_state["last_visualization_base64"] = viz_base64
-                                    # session_state["has_visualization"] = True
-                                    # session_state["pending_viz"] = True  # Flag để hiển thị sau final_answer
-                                    session_state = self._update_session_state(session_state, {
-                                        "last_visualization": viz_path,
-                                        "last_visualization_base64": viz_base64,
-                                        "has_visualization": True,
-                                        "pending_viz": True
-                                    })
-                            else:
-                                # No polyps detected case
-                                # Display entry 0 response first for no polyp case but REMOVE Medical AI Assessment prefix if exists
-                                if "response" in result and isinstance(result["response"], list) and len(result["response"]) > 0:
-                                    response_text = result['response'][0]
-                                    # Kiểm tra và loại bỏ tiêu đề Medical AI Assessment nếu có
-                                    if response_text.startswith("Medical AI Assessment:"):
-                                        response_text = response_text.replace("Medical AI Assessment:", "").strip()
-                                    response_parts.append(f"💬 **{response_text}**\n")
-                                response_parts.append("🔍 **No polyps detected in this image.**")
-                        # Giữ lại điều kiện cũ nhưng ghi log để hiểu sự khác biệt
-                        elif "polyps" in result:
-                            polyp_count = len(result.get("polyps", []))
-                        
-                        # FIXED: Check if Medical AI Assessment is already added
-                        has_assessment_header = any("Medical AI Assessment" in part for part in response_parts)
-                        
-                        # Add final answer if available
-                        if "final_answer" in result:
-                            # REMOVED: Không hiển thị tiêu đề Medical AI Assessment nữa
-                            # if not has_assessment_header:
-                            #     response_parts.append("\n💬 **Medical AI Assessment:**")
-                            response_parts.append(result["final_answer"])
-                            
-                            # Hiển thị visualization sau final_answer nếu có
-                            if session_state.get("pending_viz") and session_state.get("last_visualization_base64"):
-                                viz_base64 = session_state["last_visualization_base64"]
-                                img_data_url = f"data:image/png;base64,{viz_base64}"
-                                response_parts.append("\n\n📊 **Detector Results:**")
-                                
-                                # Add synthesized analysis before the image
-                                if "final_answer" in result and not result["final_answer"] in response_parts:
-                                    # Get a short version of the synthesized result if it's long
-                                    synth_result = result["final_answer"]
-                                    if len(synth_result) > 150:
-                                        sentences = synth_result.split('.')[:2]
-                                        short_result = '.'.join(sentences) + '.'
-                                        response_parts.append(f"{short_result}\n")
-                                
-                                # Add the visualization image
-                                response_parts.append(f'<img src="{img_data_url}" alt="Polyp Detection Results" style="max-width: 100%; height: auto; border-radius: 8px; margin: 10px 0;">')
-                                session_state = self._update_session_state(session_state, {
-                                    "pending_viz": False
-                                })
-                        
-                        # CRITICAL FIX: Update conversation history properly
-                        if "conversation_history" in result:
-                            updated_history = result["conversation_history"]
-                            
-                            # Ensure the last entry has the correct query
-                            if updated_history and len(updated_history) > 0:
-                                last_entry = updated_history[-1]
-                                
-                                # Fix query in last entry if needed
-                                if not last_entry.get("query") or last_entry.get("query") != original_message:
-                                    logger.info(f"[FIX] Correcting query in history: '{last_entry.get('query', 'EMPTY')}' -> '{original_message}'")
-                                    last_entry["query"] = original_message
-                            
-                            # session_state["conversation_history"] = updated_history  # Lỗi với State object
-                            session_state = self._update_session_state(session_state, {
-                                "conversation_history": updated_history
-                            })
-                            logger.info(f"[FIXED] Updated session with conversation_history: {len(updated_history)} entries")
-                            
-                            # FIX: Lưu conversation_history vào file để phục hồi sau này
-                            self._save_conversation_history(session_id, updated_history)
-                        
-                        # Generate streaming response
-                        streaming_text = "🔬 **Medical Image Analysis**\n\n"
-                        
-                        # Cập nhật header trước
-                        history[-1][1] = streaming_text
-                        yield "", history, session_state
-                        time.sleep(0.2)
-                        
-                        # Thêm các phần không phải final_answer
-                        non_final_parts = []
-                        final_answer_part = None
-                        
-                        for part in response_parts:
-                            if part.startswith("\n💬 **Medical AI Assessment:**"):
-                                final_answer_part = part
-                            else:
-                                non_final_parts.append(part)
-                        
-                        # Cập nhật phần không phải final_answer
-                        if non_final_parts:
-                            current_text = streaming_text + "\n".join(non_final_parts)
-                            history[-1][1] = current_text
-                            yield "", history, session_state
-                            time.sleep(0.2)
-                            streaming_text = current_text
-                        
-                        # Streaming cho final_answer nếu có
-                        if final_answer_part:
-                            # REMOVED: Không hiển thị tiêu đề Medical AI Assessment nữa
-                            # Kiểm tra xem Medical AI Assessment đã được thêm chưa
-                            # medical_ai_header_exists = "Medical AI Assessment" in streaming_text
-                            
-                            # Hiển thị tiêu đề trước nếu chưa tồn tại
-                            # if not medical_ai_header_exists:
-                            #     streaming_text += "\n💬 **Medical AI Assessment:**\n"
-                            #     history[-1][1] = streaming_text
-                            #     yield "", history, session_state
-                            #     time.sleep(0.2)
-                            
-                            # Kiểm tra xem có streaming chunks không
-                            if "response_chunks" in result and result["response_chunks"]:
-                                chunks = result["response_chunks"]
-                                logger.info(f"Found {len(chunks)} streaming chunks for image assessment")
-                                
-                                for chunk in chunks:
-                                    streaming_text += chunk
-                                    history[-1][1] = streaming_text
-                                    yield "", history, session_state
-                                    time.sleep(0.05)  # Điều chỉnh tốc độ streaming
-                            else:
-                                # Lấy nội dung final_answer (bỏ tiêu đề)
-                                logger.info(f"dont use chunk: {final_answer_part}")
-                                final_content = final_answer_part.replace("\n💬 **Medical AI Assessment:**\n", "").replace("\n💬 **Medical AI Assessment:**", "")
-                                
-                                # Stream từng câu một
-                                sentences = re.split(r'(?<=[.!?])\s+', final_content)
-                                for sentence in sentences:
-                                    if not sentence.strip():
-                                        continue
-                                    streaming_text += sentence + " "
-                                    history[-1][1] = streaming_text
-                                    yield "", history, session_state
-                                    time.sleep(0.05)
-                        else:
-                            # Nếu không có final_answer thì cập nhật tất cả các phần còn lại
-                            streaming_text = "🔬 **Medical Image Analysis**\n\n" + "\n".join(response_parts)
-                            history[-1][1] = streaming_text
-                            yield "", history, session_state
-                        
-                    else:
-                        error_msg = result.get("error", "Unknown error")
-                        response_parts = [f"❌ Error analyzing the image: {error_msg}"]
-                        history[-1][1] = "\n".join(response_parts)
-                        yield "", history, session_state
-                        
-                else:
-                    # =============  TEXT-ONLY WORKFLOW =============
-                    logger.info(f"Processing text-only query: '{original_message[:50]}...'")
-                    
-                    history[-1][1] = "🧠 Consulting via LLaVA..."
-                    yield "", history, session_state
-                    time.sleep(0.3)
-                    
-                    # 4. CRITICAL FIX: Pass original_message to analyze
-                    result = self.medical_ai.analyze(
-                        image_path=None,
-                        query=original_message,  # <-- Use original_message here too
-                        medical_context={
-                            "user_context": context,
-                            "is_text_only": True
-                        } if context else {"is_text_only": True},
-                        conversation_history=self._get_session_value(session_state, "conversation_history", []),  # CRITICAL: Pass conversation history
-                        session_id=session_id  # CRITICAL: Pass session_id explicitly
-                    )
-                    
-                    logger.debug(f"Text-only result: success={result.get('success', False)}")
-                    
-                    if result.get("success", False):
-                        # Check VQA result
-                        vqa_success = True
-                        if "final_result" in result and "agent_results" in result["final_result"] and "vqa_result" in result["final_result"]["agent_results"]:
-                            vqa_result = result["final_result"]["agent_results"]["vqa_result"]
-                            vqa_success = vqa_result.get("success", False)
-                            
-                            if not vqa_success:
-                                error_response = "❌ **Medical advisory system unavailable**\n\n"
-                                error_response += vqa_result.get("answer", "An undefined error occurred during consultation.")
-                                history[-1][1] = error_response
-                                yield "", history, session_state
-                                return
-                        
-                        # VQA succeeded
-                        if vqa_success and "final_answer" in result:
-                            # Chuẩn bị phần đầu của response (không phải streaming)
-                            streaming_text = ""
-                            
-                            if context:
-                                # Loại bỏ dòng "Based on previous information:"
-                                # streaming_text += "💭 **Based on previous information:**\n"
-                                # streaming_text += (context[:200] + "..." if len(context) > 200 else context) + "\n\n"
-                                pass  # Bỏ qua phần hiển thị thông tin ngữ cảnh trước đó
-                            
-                            streaming_text += "💬 **Medical AI Response:**\n"
-                            
-                            # Cập nhật phần đầu trước
-                            history[-1][1] = streaming_text
-                            yield "", history, session_state
-                            time.sleep(0.2)
-                            
-                            # Thực hiện streaming từ các chunks sẵn có nếu có
-                            if "response_chunks" in result and result["response_chunks"]:
-                                chunks = result["response_chunks"]
-                                logger.info(f"Found {len(chunks)} streaming chunks to display")
-                                
-                                current_text = streaming_text
-                                for chunk in chunks:
-                                    current_text += chunk
-                                    history[-1][1] = current_text
-                                    yield "", history, session_state
-                                    time.sleep(0.05)  # Điều chỉnh tốc độ streaming
-                            else:
-                                # Fallback: Stream từng câu nếu không có chunks
-                                logger.info("No streaming chunks found, falling back to sentence splitting")
-                                final_answer = result["final_answer"]
-                                sentences = re.split(r'(?<=[.!?])\s+', final_answer)
-                                
-                                # Stream từng câu một
-                                current_text = streaming_text
-                                for sentence in sentences:
-                                    if not sentence.strip():
-                                        continue
-                                    current_text += sentence + " "
-                                    history[-1][1] = current_text
-                                    yield "", history, session_state
-                                    time.sleep(0.05)  # Điều chỉnh tốc độ streaming
-                            
-                            # Loại bỏ footer "Processed by: LLaVA-Med (Medical LLM)"
-                            # current_text += "\n\n🔬 **Processed by:** LLaVA-Med (Medical LLM)"
-                            history[-1][1] = current_text
-                            yield "", history, session_state
-                            
-                            # 5. CRITICAL FIX: Update conversation history for text-only too
-                            if "conversation_history" in result:
-                                updated_history = result["conversation_history"]
-                                
-                                # Fix query in last entry if needed
-                                if updated_history and len(updated_history) > 0:
-                                    last_entry = updated_history[-1]
-                                    if not last_entry.get("query") or last_entry.get("query") != original_message:
-                                        logger.info(f"[FIX] Correcting text-only query in history: '{last_entry.get('query', 'EMPTY')}' -> '{original_message}'")
-                                        last_entry["query"] = original_message
-                                
-                                # session_state["conversation_history"] = updated_history  # Lỗi với State object
-                                session_state = self._update_session_state(session_state, {
-                                    "conversation_history": updated_history
-                                })
-                                logger.info(f"[FIXED] Updated session with text conversation_history: {len(updated_history)} entries")
-                                
-                                # FIX: Lưu conversation_history vào file cho cả text-only workflow
-                                self._save_conversation_history(session_id, updated_history)
-                    else:
-                        # Handle text-only system error
-                        logger.error(f"Medical AI system failed: {result.get('error', 'Unknown error')}")
-                        error_response = self._create_system_error_response(original_message)  # Use original_message
-                        history[-1][1] = error_response
-                        yield "", history, session_state
-                
-                # 6. CRITICAL FIX: Save to memory with correct query
-                final_response = history[-1][1]
-                
-                # Extract polyp count if available
-                polyp_count = 0
-                if 'result' in locals() and "final_result" in result and "agent_results" in result["final_result"]:
-                    agent_results = result["final_result"]["agent_results"]
-                    if "detector_result" in agent_results:
-                        polyp_count = agent_results["detector_result"].get("count", 0)
-                
-                # Create complete interaction record with FIXED query
-                interaction = {
-                    "query": original_message,  # <-- CRITICAL FIX: Use original_message
-                    "response": final_response,
-                    "has_image": has_image,
-                    "analysis": result if 'result' in locals() else None,
-                    "polyp_count": polyp_count,
-                    "is_text_only": not has_image,
-                    "timestamp": time.time(),
-                    "session_id": session_id
-                }
-                
-                logger.debug(f"[FIXED] Saving interaction to memory: query='{original_message[:30]}...', has_image={has_image}")
-                self.memory.add_to_short_term(session_id, interaction)
-                
-                # Ensure conversation history exists in session_state
-                if not self._get_session_value(session_state, "conversation_history"):
-                    logger.warning(f"conversation_history missing in session_state, initializing new one")
-                    # session_state["conversation_history"] = []  # Lỗi với State object
-                    session_state = self._update_session_state(session_state, {
-                        "conversation_history": []
-                    })
-                
-                # If conversation_history was not updated by the workflow (common with image queries)
-                # We manually add the current interaction to it
-                ch_updated = False
-                if "conversation_history" in result:
-                    ch_updated = True
-                    logger.info(f"conversation_history updated by workflow with {len(result['conversation_history'])} entries")
-                
-                # If not updated and session contains empty list or no matching entry, add it manually
-                if not ch_updated:
-                    curr_history = session_state.get("conversation_history", [])
-                    # Check if the current query exists in the history
-                    has_matching_entry = False
-                    for entry in curr_history:
-                        if entry.get("query") == original_message and not entry.get("is_pending", False):
-                            has_matching_entry = True
-                            break
-                    
-                    # If no matching entry, manually add this interaction to history
-                    if not has_matching_entry:
-                        # logger.info(f"Manually adding current interaction to conversation_history: '{original_message[:30]}...'")
-                        history_entry = {
-                            "query": original_message,
-                            "response": final_response,
-                            "timestamp": time.time(),
-                            "has_image": has_image,
-                            "session_id": session_id
-                        }
-                        # Add entry to conversation history
-                        curr_history.append(history_entry)
-                        # session_state["conversation_history"] = curr_history  # Lỗi với State object
-                        session_state = self._update_session_state(session_state, {
-                            "conversation_history": curr_history
-                        })
-                        # logger.info(f"Conversation history updated manually, now has {len(curr_history)} entries")
-                
-                # Debug - log final state of conversation history
-                conversation_history = session_state.get("conversation_history", [])
-                # logger.info(f"FINAL conversation_history has {len(conversation_history)} entries")
-                # if conversation_history:
-                #     for i, entry in enumerate(conversation_history[:]):  # Show last 2 entries
-                #         logger.info(f"FINAL HISTORY ENTRY {i}:")
-                #         logger.info(f"  - QUERY: {entry.get('query', 'None')[:30]}...")
-                #         resp = entry.get('response', 'None')
-                #         resp_preview = resp[:30] + "..." if resp and len(resp) > 30 else resp
-                #         logger.info(f"  - RESPONSE: {resp_preview}")
-                
-                # Save important interactions to long term
-                if has_image or "polyp" in original_message.lower() or "medical" in original_message.lower():
-                    logger.info(f"Saving important interaction to long-term memory for user {user_id}")
-                    self.memory.save_to_long_term(user_id, session_id, interaction)
-                
-                # Save session history sau khi có response
-                if username and session_id and history:
-                    self.save_session_history(username, session_id, history)
-                
-                # Make sure result is in markdown 
-                return "", history, session_state
-                
+                result = self.medical_ai.analyze(
+                    image_path=self._save_image_to_temp(image) if image is not None else None,
+                    query=query,
+                    medical_context={"user_context": context_prompt} if context_prompt else None,
+                    conversation_history=conv_history,
+                    session_id=sid
+                )
             except Exception as e:
-                import traceback
-                logger.error(f"Error processing message: {str(e)}")
-                logger.error(traceback.format_exc())
-                error_response = self._create_system_error_response(original_message)  # Use original_message
-                history[-1][1] = error_response
+                logger.error(e)
+                history[-1][1] = "❌ Lỗi hệ thống, vui lòng thử lại."
                 yield "", history, session_state
-        
-        def collect_response_parts(self, parts):
-            """Ghép các phần của response thành một chuỗi đầy đủ."""
-            if not parts:
-                return ""
+                return
+
+            # ----- 6. Xử lý kết quả -----------------------------------------------------
+            if not result.get("success", False):
+                history[-1][1] = f"❌ {result.get('error', 'Unknown error')}"
+                yield "", history, session_state
+                return
+
+            # Xử lý visualization nếu có
+            has_visualization = False
+            visualization_html = ""
+            visualization_file_path = ""
+            
+            # Escape square brackets in response to prevent markdown rendering issues
+            if "final_answer" in result:
+                result["final_answer"] = result["final_answer"].replace("[", "\\[").replace("]", "\\]")
+            
+            if "response_chunks" in result and result["response_chunks"]:
+                # Escape square brackets in each chunk
+                result["response_chunks"] = [chunk.replace("[", "\\[").replace("]", "\\]") for chunk in result["response_chunks"]]
+            
+            if "agent_results" in result and "detection" in result["agent_results"]:
+                detector = result["agent_results"]["detection"]
+                logger.info(f"Direct detector keys: {list(detector.keys())}")
+                logger.info(f"Has visualization_base64: {detector.get('visualization_base64') is not None}")
                 
-            return "\n".join(parts)
-        
-        def _create_system_error_response(self, query):
-            """Create an error response for system failures."""
-            error_message = [
-                "❌ **System Error**",
-                "",
-                "I apologize, but I encountered a technical issue while processing your request.",
-                "",
-                "Please try again with:",
-                "- A clearer description",
-                "- A different image (if you uploaded one)",
-                "- Break complex questions into simpler ones",
-                "",
-                "If the problem persists, please contact technical support."
-            ]
-            return "\n".join(error_message)
-            
-        def save_session_history(self, username, session_id, history):
-            """Save chat history to disk"""
-            if not username or not session_id or not history:
-                logger.warning(f"Missing data for save_session_history: username={bool(username)}, session_id={bool(session_id)}, history={len(history) if history else 0}")
-                return False
+                # Check if we should show visualization based on the show_visualization flag
+                show_visualization = detector.get("show_visualization", False)
+                logger.info(f"Show visualization flag: {show_visualization}")
                 
-            # Ensure history directory exists
-            history_dir = os.path.join("sessions", "history")
-            os.makedirs(history_dir, exist_ok=True)
-            
-            history_file = os.path.join(history_dir, f"{session_id}.json")
-            
-            # Log the history we're about to save
-            logger.info(f"[SAVE] Saving {len(history)} messages to {history_file}")
-            
-            try:
-                with open(history_file, "w") as f:
-                    json.dump(history, f, ensure_ascii=False, indent=2)
+                if detector.get("visualization_base64") and show_visualization:
+                    viz_base64 = detector["visualization_base64"]
+                    has_visualization = True
+                    logger.info(f"Found visualization in direct detector (len: {len(viz_base64) if viz_base64 else 0})")
                     
-                logger.info(f"[SAVE] Successfully saved {len(history)} messages for session {session_id}")
-                return True
-            except Exception as e:
-                logger.error(f"Error saving session history: {str(e)}")
-                return False
-                
-        def load_previous_session(self, username, session_id):
-            """Load chat history from a previous session"""
-            if not username or not session_id:
-                logger.warning(f"Missing username or session_id in load_previous_session")
-                return []
-                
-            # Check for session messages
-            history_dir = os.path.join("sessions", "history")
-            os.makedirs(history_dir, exist_ok=True)
-            
-            history_file = os.path.join(history_dir, f"{session_id}.json")
-            logger.info(f"[LOAD] Checking for history file: {history_file}")
-            
-            if not os.path.exists(history_file):
-                logger.info(f"No history file found for session {session_id}")
-                # Fallback to memory system if available
-                try:
-                    user_id = self.generate_user_id(username)
-                    if hasattr(self, "memory") and hasattr(self.memory, "load_previous_session"):
-                        memory_history = self.memory.load_previous_session(user_id, session_id)
-                        if memory_history:
-                            logger.info(f"Found {len(memory_history)} messages in memory system")
-                            return memory_history
-                except Exception as e:
-                    logger.error(f"Error checking memory system: {e}")
-                return []
-                
-            try:
-                with open(history_file, "r") as f:
-                    logger.info(f"[LOAD] Reading history file for session {session_id}")
-                    history = json.load(f)
-                    # FIX: Đảm bảo rằng history đọc được là hợp lệ
-                    if not isinstance(history, list):
-                        logger.error(f"Invalid history format in {history_file}, expected list but got {type(history)}")
-                        return []
+                    # Đảm bảo viz_base64 không chứa phần header của data URL
+                    if viz_base64 and "," in viz_base64:
+                        viz_base64 = viz_base64.split(",", 1)[1]
                     
-                    # FIX: Lọc các tin nhắn không hợp lệ
-                    valid_history = []
-                    for entry in history:
-                        if isinstance(entry, list) and len(entry) >= 2:
-                            valid_history.append(entry)
+                    # Lưu vào file thay vì embed trực tiếp vào response
+                    file_path = self._save_visualization_to_file(viz_base64, sid)
+                    visualization_file_path = file_path
+                    
+                    # Sử dụng định dạng Markdown cho hình ảnh
+                    visualization_html = f"\n\n### 📊 Kết quả phát hiện:\n\n"
+                    
+                    # Dùng đường dẫn file thay vì base64 inline
+                    if file_path and os.path.exists(file_path):
+                        # Đảm bảo đường dẫn file là tương đối từ gốc để Gradio có thể xử lý
+                        # Bỏ "visualizations/" ở đầu đường dẫn nếu có, vì thư mục này đã được khai báo trong allowed_paths
+                        if file_path.startswith("visualizations/"):
+                            display_path = file_path
                         else:
-                            logger.warning(f"Skipping invalid history entry: {entry}")
+                            display_path = file_path
+                        
+                        # Log cho debug
+                        logger.info(f"Visualization file path: {file_path}")
+                        logger.info(f"Display path: {display_path}")
+                        
+                        # Sử dụng thẻ HTML img thay vì markdown - đảm bảo không có xung đột với markdown
+                        visualization_html += f'<div style="text-align: left; margin: 20px 0;"><img src="file/{display_path}" alt="Detection Result" style="max-width: 90%; height: auto; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.2); display: inline-block;"></div>'
+                    else:
+                        visualization_html += "*Không thể hiển thị hình ảnh kết quả*"
                     
-                    logger.info(f"[LOAD] Loaded {len(valid_history)} valid messages from session {session_id}")
-                    return valid_history
-            except Exception as e:
-                logger.error(f"Error loading session history: {str(e)}")
-                return []
-        
-        def get_user_sessions(self, username: str) -> List[Dict[str, Any]]:
-            """Lấy danh sách các phiên của người dùng."""
-            if not username:
-                return []
+                    # Lưu vào session_state để có thể dùng lại sau này
+                    session_state = self._update_session_state(session_state, {
+                        "last_visualization_file": file_path
+                    })
+                elif detector.get("objects") and len(detector.get("objects", [])) > 0:
+                    # If we have detection objects but visualization is not shown, add a note
+                    logger.info(f"Found {len(detector.get('objects', []))} objects but visualization is not shown")
+            
+            # Kiểm tra visualization trong session_state (đã lưu từ trước)
+            elif session_state.get("last_visualization_file"):
+                file_path = session_state["last_visualization_file"]
+                has_visualization = True
+                visualization_file_path = file_path
                 
-            # Lấy user ID từ username
-            user_id = self.generate_user_id(username)
-            
-            # Danh sách kết quả session
-            sessions = {}
-            
-            # Thử lấy session từ bộ nhớ dài hạn (nếu có)
-            try:
-                if hasattr(self, "memory") and hasattr(self.memory, "get_user_sessions"):
-                    memory_sessions = self.memory.get_user_sessions(user_id)
-                    # Thêm các session từ bộ nhớ dài hạn
-                    for session in memory_sessions:
-                        session_id = session.get("session_id")
-                        if session_id:
-                            sessions[session_id] = session
-            except Exception as e:
-                logger.error(f"Error getting sessions from memory: {e}")
-            
-            # Thử lấy persistent session ID (nếu có)
-            persistent_session = self._load_persistent_session_id(username)
-            
-            # Kiểm tra session history cho persistent session
-            history_dir = os.path.join("sessions", "history")
-            os.makedirs(history_dir, exist_ok=True)
-            
-            # Thêm các session từ thư mục history
-            try:
-                for file_name in os.listdir(history_dir):
-                    if file_name.endswith(".json"):
-                        session_id = file_name.replace(".json", "")
-                        if session_id not in sessions:
-                            history_file = os.path.join(history_dir, file_name)
-                            try:
-                                with open(history_file, "r") as f:
-                                    history = json.load(f)
-                                    msg_count = len(history)
-                                    
-                                session = {
-                                    "session_id": session_id,
-                                    "user_id": user_id, 
-                                    "timestamp": os.path.getmtime(history_file),
-                                    "messages": msg_count,
-                                    "display_name": f"Session {session_id[:6]}... ({msg_count} messages)"
-                                }
-                                sessions[session_id] = session
-                            except Exception as e:
-                                logger.error(f"Error reading history file {file_name}: {e}")
-            except Exception as e:
-                logger.error(f"Error listing history directory: {e}")
-            
-            # Thêm persistent session nếu có và chưa được thêm
-            if persistent_session and persistent_session not in sessions:
-                # Tìm session history file
-                history_file = os.path.join(history_dir, f"{persistent_session}.json")
+                # Sử dụng định dạng Markdown cho hình ảnh
+                visualization_html = f"\n\n### 📊 Kết quả phát hiện:\n\n"
                 
-                if os.path.exists(history_file):
-                    # Tạo session metadata từ file
-                    try:
-                        with open(history_file, "r") as f:
-                            history = json.load(f)
-                            msg_count = len(history)
-                            
-                        session = {
-                            "session_id": persistent_session,
-                            "user_id": user_id,
-                            "timestamp": time.time(),
-                            "messages": msg_count,
-                            "display_name": f"Session {persistent_session[:6]}... ({msg_count} messages)",
-                            "is_current": True
+                # Dùng đường dẫn file
+                if file_path and os.path.exists(file_path):
+                    # Đảm bảo đường dẫn file là tương đối từ gốc để Gradio có thể xử lý
+                    # Bỏ "visualizations/" ở đầu đường dẫn nếu có, vì thư mục này đã được khai báo trong allowed_paths
+                    if file_path.startswith("visualizations/"):
+                        display_path = file_path
+                    else:
+                        display_path = file_path
+                    
+                    # Log cho debug
+                    logger.info(f"Visualization file path: {file_path}")
+                    logger.info(f"Display path: {display_path}")
+                    
+                    # Sử dụng thẻ HTML img thay vì markdown - đảm bảo không có xung đột với markdown
+                    visualization_html += f'<div style="text-align: left; margin: 20px 0;"><img src="file/{display_path}" alt="Detection Result" style="max-width: 90%; height: auto; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.2); display: inline-block;"></div>'
+                else:
+                    visualization_html += "*Không thể hiển thị hình ảnh kết quả*"
+            
+            logger.info(f"Has visualization: {has_visualization}")
+            
+            # Streaming chunk nếu có
+            if result.get("response_chunks"):
+                answer = ""
+                for chunk in result["response_chunks"]:
+                    answer += chunk
+                    history[-1][1] = answer
+                    yield "", history, session_state
+                    time.sleep(0.05)
+                
+                # Thêm visualization vào cuối nếu có
+                if has_visualization:
+                    logger.info("Adding visualization to streaming response")
+                    history[-1][1] = answer + "\n\n" + visualization_html
+                    yield "", history, session_state
+            else:
+                response_text = result.get("final_answer", "✅ Hoàn tất.")
+                
+                # Thêm visualization vào cuối nếu có
+                if has_visualization:
+                    logger.info("Adding visualization to standard response")
+                    response_text += "\n\n" + visualization_html
+                
+                history[-1][1] = response_text
+                yield "", history, session_state
+
+            # ----- 7. Cập nhật conversation_history & bộ nhớ ---------------------------
+            # Tạo phiên bản response không có base64 để lưu vào history
+            response_for_history = history[-1][1]
+            
+            # Thay thế tham chiếu ảnh trong markdown với placeholder để không lưu base64
+            if has_visualization and visualization_file_path:
+                # Tạo một phiên bản response không chứa base64 nhưng vẫn giữ thông tin về visualization
+                response_pattern = f"![Detection Result](/.*?)"
+                response_replacement = f"![Detection Result](visualization:{os.path.basename(visualization_file_path)})"
+                response_for_history = re.sub(response_pattern, response_replacement, response_for_history)
+            
+            interaction = {
+                "query": query,
+                "response": response_for_history,
+                "has_image": image is not None,
+                "has_visualization": has_visualization,
+                "visualization_file": visualization_file_path if has_visualization else "",
+                "timestamp": time.time()
+            }
+            conv_hist = self._get_session_value(session_state, "conversation_history", [])
+            conv_hist.append(interaction)
+            session_state = self._update_session_state(session_state, {
+                "conversation_history": conv_hist
+            })
+            self._save_conversation_history(sid, conv_hist)
+            self.memory.add_to_short_term(sid, interaction)
+
+            # Lưu long-term nếu quan trọng
+            if image is not None or any(k in query.lower() for k in ("polyp", "medical")):
+                self.memory.save_to_long_term(uid, sid, interaction)
+
+            # ----- 8. Lưu UI history ra file KHÔNG dùng nữa vì đã lưu conversation history ---
+            # self._save_conversation_history(sid, history)
+
+            yield "", history, session_state    
+
+        def create_enhanced_interface(self):
+            """
+            Classic-layout UI: chat (scale=7) bên trái, upload ảnh + tài liệu (scale=3) bên phải.
+            Mọi logic xử lý gốc (streaming, session, memory, clear, sync…) được giữ nguyên.
+            """
+            import gradio as gr, os, uuid, logging
+            logger = logging.getLogger(__name__)
+
+            # ---------- Cấu hình ----------
+            theme        = self.app_config.get("ui.theme", "soft")
+            chat_height  = self.app_config.get("ui.chat_height", 500)
+
+            with gr.Blocks(title=self.app_config.get("app.title", "Medical AI Assistant"),
+                        theme=theme,
+                        css="""
+                        .medical-chatbot {
+                            font-family: 'Arial', sans-serif;
                         }
-                        sessions[persistent_session] = session
+                        .medical-chatbot .message {
+                            padding: 10px;
+                        }
+                        .medical-chatbot .message-wrap {
+                            overflow-wrap: break-word;
+                            word-break: break-word;
+                        }
+                        .gradio-container img {
+                            max-height: 100%;
+                            object-fit: contain;
+                        }
+                        /* Điều chỉnh kích thước ảnh trong khung upload */
+                        .image-container img, .upload-preview img {
+                            max-width: 70% !important;
+                            max-height: 70% !important;
+                            margin: 0 auto !important;
+                            display: block !important;
+                        }
+                        /* Class tùy chỉnh cho ảnh nhỏ hơn */
+                        .small-image-preview img {
+                            max-width: 60% !important;
+                            max-height: 60% !important;
+                            transform: scale(0.8);
+                            transform-origin: center;
+                        }
+                        /* Hiển thị ảnh trong chat */
+                        .chatbot-container img {
+                            border-radius: 8px;
+                            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+                            margin: 8px 0;
+                            max-width: 90%;
+                            display: block;
+                            margin-left: 0 !important; /* Căn lề trái */
+                            margin-right: auto !important;
+                        }
+                        /* Đảm bảo ảnh trong visualization hiển thị đúng */
+                        .visualization-image {
+                            width: 90%;
+                            margin: 10px auto;
+                            display: block;
+                            border-radius: 8px;
+                            box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+                            margin-left: 0 !important; /* Căn lề trái */
+                            margin-right: auto !important;
+                        }
+                        /* Căn giữa ảnh trong khung upload */
+                        .medium-image-preview {
+                            display: flex !important;
+                            justify-content: center !important;
+                            align-items: center !important;
+                        }
+                        .medium-image-preview > div {
+                            display: flex !important;
+                            justify-content: center !important;
+                            width: 100% !important;
+                        }
+                        .medium-image-preview img {
+                            margin: 0 auto !important;
+                            display: block !important;
+                            object-fit: contain !important;
+                        }
+                        /* Căn lề trái cho tất cả các hình ảnh trong chatbot */
+                        .chatbot-container > div > div > div img {
+                            margin-left: 0 !important;
+                            margin-right: auto !important;
+                            text-align: left !important;
+                        }
+                        /* Đảm bảo div chứa hình ảnh căn trái */
+                        .chatbot-container div[style*="text-align"] {
+                            text-align: left !important;
+                        }
+                        """
+                        ) as interface:
+
+                # ---- Header --------------------------------------------------------
+                gr.Markdown("# 🩺 Medical AI Assistant")
+                gr.Markdown("Interactive medical image analysis and consultation")
+
+                # ---- Username ẩn (để lưu session) ----------------------------------
+                username = gr.Textbox(value="default_user", visible=False)
+
+                # ---- Khối chính ----------------------------------------------------
+                with gr.Row():
+                    # === Cột trái: Chatbot + nhập liệu =================================
+                    with gr.Column(scale=7):
+                        chatbot = gr.Chatbot(height=chat_height,
+                                            show_copy_button=True,
+                                            avatar_images=(None, None),
+                                            bubble_full_width=False,
+                                            line_breaks=True,
+                                            render_markdown=True,
+                                            sanitize_html=False,  # Allow HTML content
+                                            elem_classes="medical-chatbot chatbot-container",
+                                            show_label=False)
+
+                        with gr.Row():
+                            msg = gr.Textbox(
+                                show_label=False,
+                                placeholder="Nhập câu hỏi y khoa hoặc hỏi về ảnh nội soi...",
+                                container=False,
+                                lines=1,
+                                max_lines=5
+                            )
+                            submit_btn = gr.Button("💬 Gửi", variant="primary", scale=0)
+
+                    # === Cột phải: Ảnh + toolbar ======================================
+                    with gr.Column(scale=3):
+                        image_upload = gr.Image(
+                            label="🖼️ Medical Image (optional)",
+                            type="pil",
+                            height=200,             # Giữ nguyên hoặc tăng lên nếu muốn
+                            show_download_button=False,
+                            show_label=True,
+                            container=True,
+                            elem_id="image_upload_box",   # ← gắn ID riêng để CSS dễ "bắt"
+                        )
+                        
+                        gr.HTML("""
+                        <style>
+                        /* --- Căn giữa hoàn toàn khung upload --- */
+                        #image_upload_box .upload-container,
+                        #image_upload_box .upload-preview {
+                            position: relative;
+                            display: flex !important;
+                            justify-content: center !important;
+                            align-items: center !important;
+                            width: 100% !important;
+                            height: 100% !important;
+                            overflow: hidden;
+                            padding-top: 40px;  
+                        }
+
+                        /* --- Giới hạn kích thước ảnh và giữ aspect ratio --- */
+                        #image_upload_box .upload-preview img {
+                            max-width: 100% !important;
+                            max-height: 100% !important;
+                            object-fit: contain !important;   /* luôn nằm gọn trong khung */
+                            margin: 0 auto !important;
+                            display: block !important;
+                        }
+                        </style>
+                        """)
+                        
+                        image_status = gr.Markdown("**No Image**")
+
+                        doc_file = gr.File(
+                            label="📄 Đính kèm tài liệu (PDF/DOCX/TXT)",
+                            file_types=["pdf", "docx", "txt"],
+                            file_count="multiple",
+                            height=50
+                        )
+                        
+
+                        # Nút xoá toàn bộ chat + sync
+                        clear_btn = gr.Button("🗑️ Delete Chat History")
+                        sync_history_btn = gr.Button("🔄 Sync History")
+
+                # ---- State ẩn ------------------------------------------------------
+                session_state = gr.State({})   # chứa session_id, conversation_history, ...
+                image_state   = gr.State(None) # lưu đường dẫn ảnh tạm thời
+
+                # ---------------------------------------------------------------------
+                # 1) ***TẢI LỊCH SỬ TỰ ĐỘNG KHI MỞ GIAO DIỆN***
+                # ---------------------------------------------------------------------
+                def auto_sync_history(username):
+                    new_state = {}
+                    session_id = self._load_persistent_session_id(username)
+                    if session_id:
+                        new_state["session_id"] = session_id
+                        new_state["user_id"]    = self.generate_user_id(username)
+
+                        conv_hist = self._load_conversation_history(session_id)
+                        if conv_hist:
+                            # Đảm bảo conv_hist đúng định dạng
+                            conv_hist = self._ensure_history_format(conv_hist)
+                            new_state["conversation_history"] = conv_hist
+                            # dựng UI history từ conv_hist nếu chưa có
+                            ui_history = self.load_previous_session(username, session_id) or \
+                                        [[e["query"], e["response"]] for e in conv_hist
+                                        if e.get("query") and e.get("response")]
+                            return ui_history, new_state
+                    return [], new_state
+
+                # ---------------------------------------------------------------------
+                # 2) ***XỬ LÝ TRẠNG THÁI ẢNH***
+                # ---------------------------------------------------------------------
+                def update_image_status(img, _state):
+                    if img is None:
+                        return (
+                            "**Chưa có ảnh**",
+                            None                         # image_state
+                        )
+
+                    # Lấy tên file (nếu có)
+                    file_name = (
+                        os.path.basename(img) if isinstance(img, str) and os.path.exists(img)
+                        else os.path.basename(img.name)  if hasattr(img, "name") and os.path.exists(img.name)
+                        else "image"
+                    )
+                    # Trả về trạng thái mới
+                    return (
+                        f"**✅ Đã tải: {file_name}**",
+                        img                          # image_state
+                    )
+
+                # 3.3  Callback xoá ảnh
+                def clear_image(_state):
+                    return (
+                        None,                             # reset image_upload
+                        "**Chưa có ảnh**",                # reset status
+                        None,                             # reset image_state
+                    )
+
+                image_upload.change(
+                    fn=update_image_status,                   # callback
+                    inputs=[image_upload, image_state],
+                    outputs=[image_status, image_state],  # không cập nhật lại image_upload
+                    queue=False
+                )
+
+                # ---------------------------------------------------------------------
+                # 3) ***UPLOAD TÀI LIỆU***
+                # ---------------------------------------------------------------------
+                def update_doc_status(file):
+                    if not file:
+                        return ""
+                    elif isinstance(file, list):
+                        if len(file) == 0:
+                            return ""
+                        elif len(file) == 1:
+                            return f"📄 Đã đính kèm: {file[0].name}" if hasattr(file[0], 'name') else f"📄 Đã đính kèm: {file[0]}"
+                        else:
+                            return f"📄 Đã đính kèm: {len(file)} tài liệu"
+                    else:
+                        return f"📄 Đã đính kèm: {file.name}" if hasattr(file, 'name') else f"📄 Đã đính kèm: {file}"
+
+                doc_file.change(update_doc_status, inputs=[doc_file], outputs=[msg])
+                doc_file.change(self.process_document_upload,
+                                inputs=[doc_file, session_state],
+                                outputs=[session_state])
+
+                # ---------------------------------------------------------------------
+                # 4) ***GỬI TIN NHẮN***
+                # ---------------------------------------------------------------------
+                # Kích hoạt khi nhấn nút Gửi
+                submit_btn.click(self.process_message_streaming,
+                               inputs=[msg, image_upload, chatbot, username, session_state],
+                               outputs=[msg, chatbot, session_state],
+                               queue=True)
+                
+                # Kích hoạt khi nhấn phím Enter trong textbox
+                msg.submit(self.process_message_streaming,
+                          inputs=[msg, image_upload, chatbot, username, session_state],
+                          outputs=[msg, chatbot, session_state],
+                          queue=True)
+
+                # ---------------------------------------------------------------------
+                # 5) ***SYNC HISTORY KHI LOAD***
+                # ---------------------------------------------------------------------
+                interface.load(auto_sync_history,
+                            inputs=[username],
+                            outputs=[chatbot, session_state])
+
+                # ---------------------------------------------------------------------
+                # 6) ***XÓA TOÀN BỘ CUỘC TRÒ CHUYỆN***
+                # ---------------------------------------------------------------------
+                def clear_handler():
+                    try:
+                        sid  = self._get_session_value(session_state, "session_id")
+                        uid  = self._get_session_value(session_state, "user_id")
+                        usr  = username.value
+                        new_sid = str(uuid.uuid4())
+
+                        # reset session_state
+                        st = self._update_session_state(session_state, {
+                            "session_id": new_sid,
+                            "conversation_history": [],
+                            "user_id": uid
+                        })
+
+                        # xoá file lịch sử trên đĩa (nếu có)
+                        for p in [f"sessions/history/{sid}.json",
+                                f"sessions/conversation_history/{sid}.json",
+                                f"sessions/{usr}.session"]:
+                            if p and os.path.exists(p):
+                                os.remove(p)
+
+                        # clear memory
+                        if hasattr(self.memory, "clear_short_term") and sid:
+                            self.memory.clear_short_term(sid)
+                        if hasattr(self.memory, "clear_long_term") and uid:
+                            self.memory.clear_long_term(uid, sid)
+
                     except Exception as e:
-                        logger.error(f"Error loading persistent session history: {e}")
-            
-            # Chuyển đổi dict thành list và sắp xếp theo thời gian
-            result = list(sessions.values())
-            result.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
-            
-            return result
+                        logger.error(f"Clear error: {e}")
+                        st = self._update_session_state(session_state, {
+                            "session_id": str(uuid.uuid4()),
+                            "conversation_history": []
+                        })
+                    # trả về giá trị reset
+                    return st, "", [], None, "**Chưa có ảnh**", None
+
+                clear_btn.click(clear_handler,
+                                inputs=[],
+                                outputs=[session_state, msg, chatbot,
+                                        image_upload, image_status, image_state])
+
+                # ---------------------------------------------------------------------
+                # 7) ***ĐỒNG BỘ LẠI LỊCH SỬ***
+                # ---------------------------------------------------------------------
+                def sync_history_handler(history, user, st):
+                    sid = self._get_session_value(st, "session_id") or \
+                        self._load_persistent_session_id(user)
+                    if not sid:
+                        return history, st
+                    conv = self._load_conversation_history(sid)
+                    if not conv:
+                        return history, st
+                        
+                    # Đảm bảo conv đúng định dạng
+                    conv = self._ensure_history_format(conv)
+                    st = self._update_session_state(st, {"conversation_history": conv})
+                    synced = self._sync_ui_history_with_conversation(history, conv)
+                    return synced, st
+
+                sync_history_btn.click(sync_history_handler,
+                                    inputs=[chatbot, username, session_state],
+                                    outputs=[chatbot, session_state])
+
+                # ---- Footer ---------------------------------------------------------
+                gr.Markdown("<div style='text-align:center; color:#888;'>Medical AI Assistant — Version 1.0</div>")
+
+            return interface
+
             
         def _load_persistent_session_id(self, username):
             """Load persistent session ID from disk"""
             if not username:
                 return None
                 
-            session_file = os.path.join("sessions", f"{username}.session")
+            session_file = self._get_persistent_session_path(username)
             
             if not os.path.exists(session_file):
                 return None
@@ -1483,6 +1076,16 @@ def create_enhanced_chatbot():
             except Exception as e:
                 logger.error(f"Error saving session ID: {e}")
                 return False
+
+        def _get_persistent_session_path(self, username):
+            """Get path to persistent session file."""
+            if not username:
+                return None
+                
+            # Ensure sessions directory exists
+            os.makedirs("sessions", exist_ok=True)
+            
+            return os.path.join("sessions", f"{username}.session")
 
         def _load_conversation_history(self, session_id: str) -> List[Dict[str, Any]]:
             """Load conversation history từ file lưu trữ."""
@@ -1602,6 +1205,19 @@ def main():
             print(f"❌ FAISS installation failed: {e}")
         return
     
+    # Tạo thư mục visualizations để lưu ảnh
+    import os
+    from pathlib import Path
+    visualizations_dir = "visualizations"
+    os.makedirs(visualizations_dir, exist_ok=True)
+    
+    # Tạo file test để đảm bảo thư mục hoạt động
+    test_file_path = os.path.join(visualizations_dir, "test.txt")
+    with open(test_file_path, "w") as f:
+        f.write("Test file to verify visualizations directory is accessible")
+    print(f"✅ Created test file at {test_file_path}")
+    print(f"✅ File exists: {os.path.exists(test_file_path)}")
+    
     # Load config
     config = MedicalAIConfig(args.config)
     
@@ -1629,6 +1245,10 @@ def main():
         chatbot = create_enhanced_chatbot()
         interface = chatbot.create_enhanced_interface()
         
+        # Get absolute path to visualizations directory
+        viz_abs_path = os.path.abspath(visualizations_dir)
+        print(f"📁 Visualizations directory: {viz_abs_path}")
+        
         # Launch interface
         interface.launch(
             server_name=config.get("app.host"),
@@ -1636,6 +1256,7 @@ def main():
             share=config.get("app.share"),
             debug=config.get("app.debug"),
             show_error=True,
+            allowed_paths=[viz_abs_path]  # Sử dụng đường dẫn tuyệt đối
         )
         
     except Exception as e:

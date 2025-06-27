@@ -473,8 +473,9 @@ class MedicalAIChatbot:
     
     def _initialize_medical_ai(self) -> MedicalAISystem:
         """Khởi tạo Medical AI System."""
+        import torch
         config = MedicalGraphConfig(
-            device="cuda" if os.environ.get("CUDA_AVAILABLE") else "cpu",
+            device="cuda" if torch.cuda.is_available() else "cpu",
         )
         return MedicalAISystem(config)
     
@@ -513,7 +514,7 @@ class MedicalAIChatbot:
             # logger.info(f"[MEMORY] Processing message, current conversation history has {len(conversation_history)} entries")
             # if len(conversation_history) > 0:
             #     logger.info(f"[MEMORY] Last history entry: {conversation_history[-1].get('query', 'NO_QUERY')[:30]}...")
-            
+             
             # Initialize system message if this is a new conversation
             if not conversation_history:
                 # logger.info("[MEMORY] Initializing new conversation history")
@@ -606,19 +607,43 @@ class MedicalAIChatbot:
                             
                             # FIXED: Hiển thị ảnh visualization trong chat
                             if detector.get("visualization_base64") and detector.get("visualization_available"):
-                                # Lưu base64 vào session_state để sử dụng sau
-                                session_state["last_visualization"] = detector.get("visualization_base64")
+                                # Lưu visualization vào file thay vì lưu base64 trực tiếp
+                                viz_base64 = detector.get("visualization_base64")
                                 
-                                # Tạo data URL từ base64
-                                img_data_url = f"data:image/png;base64,{detector.get('visualization_base64')}"
+                                # Đảm bảo viz_base64 không chứa phần header của data URL
+                                if viz_base64 and "," in viz_base64:
+                                    viz_base64 = viz_base64.split(",", 1)[1]
                                 
-                                # FIXED: Sử dụng HTML img tag thay vì markdown
-                                response_parts.append(f"\n\n📊 **Kết quả phát hiện polyp:**")
-                                response_parts.append(f'<img src="{img_data_url}" alt="Kết quả phát hiện polyp" style="max-width: 100%; height: auto; border-radius: 8px; margin: 10px 0;">')
+                                # Tạo thư mục visualizations cho session này
+                                import uuid, os, base64, time
+                                from pathlib import Path
                                 
-                                # Lưu thông tin ảnh vào session_state
-                                session_state["has_image_result"] = True
-                                session_state["last_result_image_data"] = img_data_url
+                                viz_dir = os.path.join("visualizations", session_id)
+                                os.makedirs(viz_dir, exist_ok=True)
+                                
+                                # Tạo tên file duy nhất
+                                filename = f"detect_{int(time.time())}.png"
+                                file_path = os.path.join(viz_dir, filename)
+                                
+                                # Lưu ảnh vào file
+                                try:
+                                    img_data = base64.b64decode(viz_base64)
+                                    with open(file_path, "wb") as f:
+                                        f.write(img_data)
+                                    
+                                    # Thêm path vào session_state thay vì base64
+                                    session_state["last_visualization_file"] = file_path
+                                    
+                                    # Sử dụng đường dẫn file trong phản hồi
+                                    response_parts.append(f"\n\n📊 **Kết quả phát hiện polyp:**")
+                                    response_parts.append(f'<img src="/{file_path}" alt="Kết quả phát hiện polyp" style="max-width: 100%; height: auto; border-radius: 8px; margin: 10px 0;">')
+                                    
+                                    # Lưu thông tin ảnh vào session_state
+                                    session_state["has_image_result"] = True
+                                    session_state["last_result_image_path"] = file_path
+                                except Exception as e:
+                                    logger.error(f"Error saving visualization to file: {e}")
+                                    response_parts.append("*Không thể hiển thị hình ảnh kết quả*")
                     
                     # Add medical recommendations
                     response_parts.append("\n💡 **Khuyến nghị:**")

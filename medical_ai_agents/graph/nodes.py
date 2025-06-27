@@ -21,14 +21,72 @@ def document_embedding(state: SystemState, rag_agent) -> SystemState:
     """Process and embed documents into vector database."""
     logger = logging.getLogger("graph.nodes.document_embedding")
     
-    # Check for uploaded documents
+    # Kiểm tra tài liệu đính kèm
     uploaded_docs = state.get("uploaded_documents", [])
+    query = state.get("query", "")  # Lấy query từ state
+    conversation_history = state.get("conversation_history", [])  # Lấy lịch sử hội thoại
     
+    # Log thông tin về tài liệu và truy vấn
+    if uploaded_docs:
+        logger.info(f"Found {len(uploaded_docs)} document(s) attached to input")
+        for doc in uploaded_docs[:3]:  # Log một số tài liệu đầu tiên
+            logger.info(f"Document: {os.path.basename(doc)}")
+    else:
+        logger.info("No documents attached to current input")
+    
+    if query:
+        logger.info(f"Current query: {query[:50]}..." if len(query) > 50 else f"Current query: {query}")
+    
+    if conversation_history:
+        logger.info(f"Conversation history available with {len(conversation_history)} entries")
+    
+    # BƯỚC 1: Kiểm tra xem vector database đã tồn tại và có tài liệu không
+    try:
+        has_existing_docs = rag_agent.has_documents()
+        if has_existing_docs:
+            logger.info("Existing documents found in vector database")
+            # Set the embedding result to success even if no new documents are uploaded
+            state["embedding_result"] = {
+                "success": True,
+                "documents_processed": [],
+                "message": "Vector database already contains documents",
+                "has_existing_documents": True
+            }
+            
+            # Add document_qa to required tasks if not already there
+            required_tasks = state.get("required_tasks", [])
+            execution_order = state.get("execution_order", [])
+            
+            if "document_qa" not in required_tasks:
+                logger.info("Adding document_qa to required tasks")
+                required_tasks.append("document_qa")
+                state["required_tasks"] = required_tasks
+                
+                # Add to execution order if not already there
+                if "document_qa" not in execution_order:
+                    execution_order.append("document_qa")
+                    state["execution_order"] = execution_order
+    except Exception as e:
+        logger.warning(f"Error checking for existing documents: {str(e)}")
+        state["embedding_result"] = {
+            "success": False,
+            "error": f"Error checking for existing documents: {str(e)}",
+            "has_existing_documents": False
+        }
+    
+    # BƯỚC 2: Xử lý tài liệu mới tải lên (nếu có)
     if not uploaded_docs:
-        logger.info("No documents to embed, skipping embedding step")
+        logger.info("No new documents to embed, proceeding with existing database")
+        if not state.get("embedding_result"):
+            state["embedding_result"] = {
+                "success": True,
+                "documents_processed": [],
+                "message": "No new documents to process",
+                "has_existing_documents": state.get("embedding_result", {}).get("has_existing_documents", False)
+            }
         return state
     
-    # Verify document existence
+    # Xác minh tài liệu tồn tại
     valid_docs = []
     for doc in uploaded_docs:
         if os.path.exists(doc):
@@ -38,32 +96,67 @@ def document_embedding(state: SystemState, rag_agent) -> SystemState:
     
     if not valid_docs:
         logger.warning("No valid documents found for embedding")
+        state["embedding_result"] = {
+            "success": False,
+            "error": "No valid documents found",
+            "message": "No valid documents found for processing",
+            "has_existing_documents": state.get("embedding_result", {}).get("has_existing_documents", False)
+        }
         return state
     
-    # Process and embed documents
+    # BƯỚC 3: Xử lý và nhúng tài liệu
     logger.info(f"Processing {len(valid_docs)} documents for embedding")
     try:
+        # Sử dụng RAG agent để xử lý tài liệu
         result = rag_agent.add_documents(valid_docs)
         
         if result.get("success", False):
-            logger.info(f"Successfully embedded {len(result.get('documents', []))} documents")
-            # Store embedding result in state
+            processed_files = result.get("processed_files", [])
+            processed_count = len(processed_files)
+            
+            logger.info(f"Successfully embedded {processed_count} documents")
+            
+            # Thêm thông tin về tài liệu đã xử lý vào state
             state["embedding_result"] = {
                 "success": True,
-                "documents_processed": result.get("documents", []),
-                "message": result.get("message", "Documents processed successfully")
+                "documents_processed": processed_files,
+                "message": f"Successfully processed {processed_count} documents",
+                "timestamp": time.time(),
+                "has_existing_documents": True
             }
+            
+            # Đảm bảo document_qa có trong required_tasks
+            required_tasks = state.get("required_tasks", [])
+            execution_order = state.get("execution_order", [])
+            
+            if "document_qa" not in required_tasks:
+                logger.info("Adding document_qa to required tasks")
+                required_tasks.append("document_qa")
+                state["required_tasks"] = required_tasks
+                
+                # Thêm vào execution_order nếu chưa có
+                if "document_qa" not in execution_order:
+                    execution_order.append("document_qa")
+                    state["execution_order"] = execution_order
+            
+            # Đặt document_qa làm current_task để đảm bảo nó được ưu tiên
+            state["current_task"] = "document_qa"
+            
         else:
             logger.error(f"Failed to embed documents: {result.get('error', 'Unknown error')}")
             state["embedding_result"] = {
                 "success": False,
-                "error": result.get("error", "Failed to embed documents")
+                "error": result.get("error", "Failed to embed documents"),
+                "message": "Failed to embed documents",
+                "has_existing_documents": state.get("embedding_result", {}).get("has_existing_documents", False)
             }
     except Exception as e:
         logger.error(f"Exception during document embedding: {str(e)}")
         state["embedding_result"] = {
             "success": False,
-            "error": f"Exception during document embedding: {str(e)}"
+            "error": f"Exception during document embedding: {str(e)}",
+            "message": f"Error during document embedding: {str(e)}",
+            "has_existing_documents": state.get("embedding_result", {}).get("has_existing_documents", False)
         }
     
     return state
@@ -133,6 +226,41 @@ def task_completion_wrapper(agent_node: Callable, task_name: str) -> Callable:
 def task_analyzer(state: SystemState, llm: ChatOpenAI) -> Dict:
     """Analyze tasking requirements based on query and metadata."""
     logger = logging.getLogger("graph.nodes.task_analyzer")
+    
+    # Check if conversation_history is present
+    if "conversation_history" in state:
+        conv_history = state["conversation_history"]
+        logger.info(f"[DEBUG] task_analyzer received conversation history with {len(conv_history)} entries")
+        if conv_history:
+            # Log a sample of entries
+            for i, entry in enumerate(conv_history[:2]):
+                logger.info(f"[DEBUG] History entry {i}: query='{entry.get('query', '')[:30]}...', response='{entry.get('response', '')[:30]}...'")
+            
+            if len(conv_history) > 2:
+                for i, entry in enumerate(conv_history[-2:], start=len(conv_history)-2):
+                    logger.info(f"[DEBUG] History entry {i}: query='{entry.get('query', '')[:30]}...', response='{entry.get('response', '')[:30]}...'")
+    else:
+        logger.warning("[DEBUG] task_analyzer did not receive conversation_history")
+    
+    # Check for image and query
+    image_path = state.get("image_path", "")
+    query = state.get("query", "")
+    
+    # Validate inputs - must have either image or query
+    if not image_path and not query:
+        logger.warning("Missing both image and query, cannot analyze task")
+        if state.get("raw_query"):
+            # Try to use raw query as fallback
+            query = state.get("raw_query")
+            state["query"] = query
+            logger.info(f"Using raw query as fallback: {query[:100]}...")
+        else:
+            # No valid inputs, return error state
+            return {
+                **state,
+                "error": "No image or query provided",
+                "required_tasks": []
+            }
     
     # Check for required parameters
     if "query" not in state or state["query"] == "":
@@ -278,14 +406,14 @@ def task_analyzer(state: SystemState, llm: ChatOpenAI) -> Dict:
         Available tasks (multiple can be selected):
         - polyp_detection: Detect polyps and abnormal objects
         - modality_classification: Classify endoscopy technique (BLI, WLI, FICE, LCI)
-        - region_classification: Classify anatomical location in gastrointestinal tract
+        - region_classification: Classify anatomical region in gastrointestinal tract
         - medical_qa: Answer medical questions, provide consultation, explain medical concepts
         - document_qa: Answer questions related to documents or PDF files
         
         Guidelines:
         - If asking about polyps/lesions/detection → include polyp_detection
         - If asking about technique/modality/BLI/WLI → include modality_classification
-        - If asking about location/anatomy/region → include region_classification
+        - If asking about anatomical region/anatomy/where in GI tract → include region_classification
         - If explanation/consultation/analysis needed → include medical_qa
         - If asking about documents/PDF → include document_qa
         - Complex questions may require multiple tasks
@@ -502,6 +630,10 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
     execution_order = state.get("execution_order", [])
     logger.info(f"Synthesizer - Required tasks: {required_tasks}, Completed tasks: {completed_tasks}")
     
+    # Check for streaming support - Keep this for other streaming functionality
+    response_stream = state.get("response_stream")
+    enable_streaming = response_stream is not None
+    
     # Clean up pending/debug entries from conversation history
     if conversation_history:
         conversation_history = [entry for entry in conversation_history if not entry.get("is_pending", False)]
@@ -540,7 +672,10 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
                 "boxes": detector.get("boxes", []),
                 "scores": detector.get("scores", []),
                 "classes": detector.get("classes", []),
-                "image_path": detector.get("image_path", "")
+                "objects": detector.get("objects", []),
+                "image_path": detector.get("image_path", ""),
+                "visualization_base64": detector.get("visualization_base64", ""),
+                "show_visualization": detector.get("show_visualization", False)
             }
     
     # Process modality result
@@ -650,227 +785,170 @@ def result_synthesizer(state: SystemState, llm: ChatOpenAI) -> SystemState:
     
     # Build simple prompt for synthesis
     task_context = []
+
+    if state.get("conversation_history"):
+        task_context.append(f"Conversation history: {state.get('conversation_history')}")
     
     if has_detection:
-        task_context.append("polyp detection")
+        det = agent_results["detection"]
+        task_context.append(f"Polyp Detection: Found {det['count']} polyps in the image")
+    
     if has_modality:
-        task_context.append("modality classification")
+        mod = agent_results["modality"]
+        task_context.append(f"Modality Classification: {mod['class_name']} (confidence: {mod['confidence']:.1%})")
+    
     if has_region:
-        task_context.append("anatomical region classification")
-    if has_rag:
-        task_context.append("document analysis")
+        reg = agent_results["region"]
+        task_context.append(f"Anatomical Region: {reg['class_name']} (confidence: {reg['confidence']:.1%})")
+    
     if has_vqa:
-        task_context.append("medical question answering")
+        vqa = agent_results["vqa"]
+        task_context.append(f"Visual Question Answering: {vqa['answer']}")
     
-    tasks_str = ", ".join(task_context)
+    if has_rag:
+        rag = agent_results["rag"]
+        task_context.append(f"Document Retrieval: Information from {len(rag.get('sources', []))} sources")
     
-    # Determine if the response should prioritize RAG or combined results
-    prioritize_rag = has_rag and "rag" in agent_results and agent_results["rag"].get("query_complexity", "simple") == "simple"
+    # Build prompt for LLM
+    prompt_parts = []
+    prompt_parts.append(f"TASK: You are synthesizing results from multiple medical AI analyses of medical results. If it is just a normal question and no result from system, just answer normally. The query is: '{current_query}'")
     
-    # Include conversation history in the medical prompt
-    conversation_context = ""
+    for task_info in task_context:
+        prompt_parts.append(f"- {task_info}")
     
-    if len(conversation_history) > 0:
-        # Get last 2 turns of conversation for context
-        recent_history = conversation_history[-2:] if len(conversation_history) >= 2 else conversation_history
-        
-        conversation_context = "\nConversation history:\n"
-        for i, entry in enumerate(recent_history):
-            q = entry.get("query", "")
-            r = entry.get("response", "")
-            if q and r:
-                conversation_context += f"User: {q}\nAssistant: {r}\n\n"
+    # Add vector context if available
+    if vector_context:
+        prompt_parts.append(vector_context)
     
-    # Build the prompt for synthesis
-    if is_general_query:
-        # Simple prompt for general (non-medical) queries
-        prompt_template = """You are a helpful assistant answering a general question.
-
-User query: "{query}"
-
-Please provide a direct and helpful response.{conversation_context}"""
-        
-        prompt_args = {
-            "query": current_query,
-            "conversation_context": conversation_context
-        }
+    prompt = "\n".join(prompt_parts)
     
-    elif prioritize_rag:
-        # RAG-focused prompt when document search is the primary task
-        prompt_template = """You are a medical assistant providing information based primarily on document search results.
-
-User query: "{query}"
-
-Document search results:
-{rag_answer}
-
-Sources:
-{rag_sources}
-
-{vector_context}
-
-Please synthesize a comprehensive answer that:
-1. Directly addresses the user's query
-2. Cites specific sources when referencing information
-3. Maintains medical accuracy and precision
-4. Uses proper medical terminology
-
-Your response should be well-structured and focused on the document-based information.{conversation_context}"""
-        
-        # Format RAG sources for the prompt
-        rag_sources_text = ""
-        if has_rag and agent_results["rag"].get("sources"):
-            for i, source in enumerate(agent_results["rag"]["sources"]):
-                doc = source.get("document", "Unknown")
-                page = source.get("page", 0)
-                score = source.get("score", 0.0)
-                rag_sources_text += f"[{i+1}] {doc} (page {page}, relevance: {score:.2f})\n"
-        
-        prompt_args = {
-            "query": current_query,
-            "rag_answer": agent_results["rag"]["answer"] if has_rag else "",
-            "rag_sources": rag_sources_text,
-            "vector_context": vector_context,
-            "conversation_context": conversation_context
-        }
-    
-    else:
-        # Comprehensive medical prompt for multi-task synthesis
-        prompt_template = """You are a medical assistant synthesizing results from multiple analysis tasks: {tasks}.
-
-User query: "{query}"
-
-Analysis results:
-{analysis_results}
-
-{vector_context}
-
-Please synthesize a comprehensive medical response that:
-1. Directly addresses the user's query
-2. Integrates all relevant findings from the analyses
-3. Provides clear medical explanations
-4. Maintains professional medical tone and terminology
-5. Cites sources when referencing document information
-
-Your response should be well-structured and focused on the medical significance of the findings.{conversation_context}"""
-        
-        # Build detailed analysis results text
-        analysis_text = ""
-        
-        # Add detection results
-        if has_detection:
-            detection = agent_results["detection"]
-            count = detection.get("count", 0)
-            analysis_text += f"POLYP DETECTION: {count} polyp(s) detected\n"
-            if count > 0:
-                analysis_text += "Findings:\n"
-                for i in range(min(count, len(detection.get("boxes", [])))):
-                    score = detection["scores"][i] if i < len(detection.get("scores", [])) else 0
-                    analysis_text += f"- Polyp {i+1}: confidence {score:.2f}\n"
-                analysis_text += "\n"
-        
-        # Add modality results
-        if has_modality:
-            modality = agent_results["modality"]
-            class_name = modality.get("class_name", "Unknown")
-            confidence = modality.get("confidence", 0.0)
-            analysis_text += f"MODALITY CLASSIFICATION: {class_name} (confidence: {confidence:.2f})\n"
-            
-            # Add explanation of modality
-            if class_name == "WLI":
-                analysis_text += "White Light Imaging - standard endoscopic visualization\n"
-            elif class_name == "BLI":
-                analysis_text += "Blue Light Imaging - enhanced visualization of surface patterns and vessels\n"
-            elif class_name == "FICE":
-                analysis_text += "Flexible spectral Imaging Color Enhancement - digital chromoendoscopy\n"
-            elif class_name == "LCI":
-                analysis_text += "Linked Color Imaging - enhanced visualization of mucosal changes\n"
-            analysis_text += "\n"
-        
-        # Add region results
-        if has_region:
-            region = agent_results["region"]
-            class_name = region.get("class_name", "Unknown")
-            confidence = region.get("confidence", 0.0)
-            analysis_text += f"ANATOMICAL REGION: {class_name} (confidence: {confidence:.2f})\n\n"
-        
-        # Add VQA results
-        if has_vqa:
-            vqa = agent_results["vqa"]
-            analysis_text += f"MEDICAL ANALYSIS:\n{vqa.get('answer', '')}\n"
-            if vqa.get("reasoning"):
-                analysis_text += f"Reasoning: {vqa.get('reasoning')}\n"
-            analysis_text += "\n"
-        
-        # Add RAG results
-        if has_rag:
-            rag = agent_results["rag"]
-            analysis_text += f"DOCUMENT ANALYSIS:\n{rag.get('answer', '')}\n\n"
-            if rag.get("sources"):
-                analysis_text += "Sources:\n"
-                for i, source in enumerate(rag["sources"][:3]):  # Show top 3 sources
-                    doc = source.get("document", "Unknown")
-                    page = source.get("page", 0)
-                    analysis_text += f"- {doc} (page {page})\n"
-                analysis_text += "\n"
-        
-        prompt_args = {
-            "query": current_query,
-            "tasks": tasks_str,
-            "analysis_results": analysis_text,
-            "vector_context": vector_context,
-            "conversation_context": conversation_context
-        }
-    
-    # Create and invoke chain
-    prompt = PromptTemplate.from_template(prompt_template)
-    chain = prompt | llm | StrOutputParser()
-    
-    # Invoke the chain
+    # Generate synthesis with LLM
     try:
-        synthesized_response = chain.invoke(prompt_args)
-        
-        # Build the final result
-        final_result = {
-            "task_type": state.get("task_type", "comprehensive"),
-            "success": True,
-            "session_id": state.get("session_id", ""),
-            "query": current_query,
-            "timestamp": time.time(),
-            "multi_task_analysis": {
-                "tasks_requested": state.get("required_tasks", []),
-                "tasks_completed": state.get("completed_tasks", []),
-                "execution_order": state.get("execution_order", [])
-            },
-            "agent_results": agent_results,
-            "response": synthesized_response,
-            "processing_time": processing_time,
-            "final_answer": synthesized_response
-        }
-        
-        # Add the current interaction to conversation history
-        conversation_history.append({
-            "query": current_query,
-            "response": synthesized_response,
-            "timestamp": time.time(),
-            "tasks_completed": state.get("completed_tasks", [])
-        })
-        
-        logger.info(f"Added new entry to conversation history. Now has {len(conversation_history)} entries.")
-        
-        return {
-            **state, 
-            "final_result": final_result,
-            "conversation_history": conversation_history
-        }
-        
+        # Check if we need streaming or regular response
+        if enable_streaming:
+            logger.info("Streaming synthesis response")
+            # Create an async helper function for streaming
+            import asyncio
+            
+            async def stream_response():
+                try:
+                    logger.info("Starting streaming LLM response")
+                    
+                    # Configure streaming
+                    streaming_llm = llm.with_config({
+                        "streaming": True,
+                        "temperature": 0.5  # Make responses more consistent
+                    })
+                    
+                    # Initialize response tracking
+                    final_response = ""
+                    last_update_time = time.time()
+                    update_interval = 0.2  # Update every 200ms max
+                    force_update_length = 20  # Or every 20 chars
+                    last_update_length = 0
+                    
+                    # Prepare message for LLM
+                    message = [HumanMessage(content=prompt)]
+                    
+                    # Stream tokens directly from LLM
+                    logger.info("Beginning token streaming from LLM")
+                    async for chunk in streaming_llm.astream_tokens(message):
+                        # Extract content if available
+                        if not chunk.choices or len(chunk.choices) == 0 or not hasattr(chunk.choices[0].delta, 'content'):
+                            continue
+                            
+                        # Get the token content
+                        token = chunk.choices[0].delta.content
+                        if token:
+                            # Add token to response
+                            final_response += token
+                            current_length = len(final_response)
+                            
+                            # Determine if we should send an update
+                            time_to_update = (time.time() - last_update_time) >= update_interval
+                            length_to_update = (current_length - last_update_length) >= force_update_length
+                            
+                            # Send update if needed
+                            if time_to_update or length_to_update:
+                                # Debug stream progress
+                                if logger.isEnabledFor(logging.DEBUG):
+                                    logger.debug(f"Streaming progress: {len(final_response)} chars")
+                                
+                                # Put the update in the queue
+                                try:
+                                    await response_stream.put(final_response)
+                                    last_update_time = time.time()
+                                    last_update_length = current_length
+                                except Exception as e:
+                                    logger.error(f"Error putting to queue: {str(e)}")
+                    
+                    # Always send the final complete response
+                    logger.info(f"LLM streaming complete, final length: {len(final_response)} chars")
+                    await response_stream.put(final_response)
+                    return final_response
+                    
+                except Exception as e:
+                    logger.error(f"Error in streaming response: {str(e)}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    
+                    # Try to send error message to queue
+                    error_msg = f"Error generating response: {str(e)}"
+                    try:
+                        await response_stream.put(error_msg)
+                    except Exception:
+                        pass
+                    
+                    return error_msg
+            
+            # Improved streaming implementation
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # We're already in an event loop, create a task
+                    logger.info("Using existing event loop for streaming")
+                    future = asyncio.create_task(stream_response())
+                    # Will be completed asynchronously
+                    synthesis = "Streaming response in progress..."
+                else:
+                    # No running event loop, create one
+                    logger.info("Creating new event loop for streaming")
+                    synthesis = asyncio.run(stream_response())
+            except Exception as e:
+                logger.error(f"Error setting up streaming: {str(e)}")
+                # Fallback to non-streaming response
+                synthesis = llm.invoke(prompt).content
+        else:
+            # Regular non-streaming response
+            synthesis = llm.invoke(prompt).content
     except Exception as e:
-        logger.error(f"Synthesis failed: {str(e)}")
-        return {
-            **state,
-            "final_result": {
-                "success": False,
-                "error": f"Failed to synthesize response: {str(e)}",
-                "query": current_query
-            }
-        }
+        logger.error(f"Error generating synthesis: {str(e)}")
+        synthesis = f"Failed to generate synthesis due to an error: {str(e)}"
+    
+    # Build the final result
+    final_result = {
+        "success": True,
+        "session_id": state.get("session_id", ""),
+        "task_type": task_type,
+        "query": current_query,
+        "is_text_only": is_text_only,
+        "agent_results": agent_results,
+        "response": synthesis,
+        "processing_time": processing_time,
+        "final_answer": synthesis
+    }
+    
+    # Add the current interaction to conversation history
+    conversation_history.append({
+        "query": current_query,
+        "response": synthesis,
+        "timestamp": time.time(),
+        "tasks_completed": state.get("completed_tasks", [])
+    })
+    
+    # Return the updated state
+    return {
+        **state,
+        "final_result": final_result,
+        "conversation_history": conversation_history
+    }

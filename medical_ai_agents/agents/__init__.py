@@ -12,10 +12,12 @@ from medical_ai_agents.agents.base_agent import BaseAgent
 from medical_ai_agents.agents.detector import DetectorAgent
 from medical_ai_agents.agents.classifier import ClassifierAgent
 from medical_ai_agents.agents.vqa import VQAAgent
+from medical_ai_agents.agents.rag import RAGAgent
 
 __all__ = [
     'BaseAgent',
     'DetectorAgent',
     'ClassifierAgent',
-    'VQAAgent'
+    'VQAAgent',
+    'RAGAgent'
 ]

@@ -3,16 +3,21 @@
     "title": "Medical AI Assistant",
     "description": "Hệ thống AI hỗ trợ phân tích hình ảnh nội soi",
     "host": "0.0.0.0",
-    "port": 8081,
+    "port": 8083,
     "share": true,
-    "debug": false
+    "debug": false,
+    "enable_streaming": true
   },
   "medical_ai": {
     "device": "cuda",
     "detector_model_path": "medical_ai_agents/weights/detect_best.pt",
     "vqa_model_path": "medical_ai_agents/weights/llava-med-mistral-v1.5-7b",
     "modality_classifier_path": "medical_ai_agents/weights/modal_best.pt",
-    "region_classifier_path": "medical_ai_agents/weights/location_best.pt"
+    "region_classifier_path": "medical_ai_agents/weights/location_best.pt",
+    "rag_storage_path": "medical_ai_agents/rag_storage",
+    "llm_model": "gpt-4o-mini",
+    "llm_temperature": 0.2,
+    "checkpoint_dir": "sessions"
   },
   "memory": {
     "db_path": "medical_ai_memory.db",
